@@ -69,6 +69,7 @@ export interface MixLevels {
   waves: number;
   forest: number; // CC0 field recording (see CREDITS.md)
   birdsong: number; // CC0 field recording (see CREDITS.md)
+  fire: number; // cosy fireplace (synthesised)
   tone40: number; // pure 40 Hz tone
   tone136: number; // pure 136.1 Hz tone
   binaural: number; // 6 Hz difference between ears (headphones)
