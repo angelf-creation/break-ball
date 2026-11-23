@@ -104,6 +104,7 @@ export class OrbScene {
   private videoOn = 0;
   /** last pointer position (-1..1, y up), smoothed; Corse's lit band follows it. Never decays, so it stays where you left it. */
   private pointer = { x: 0, y: 0.2, tx: 0, ty: 0.2 };
+  private jellyPush = { x: 0, y: 0 };
   private jelly = { x: 0, y: 0, vx: 0, vy: 0 };
   private disperse = 0;
   private ripples = Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, -100)); // xyz = dir * strength, w = start
@@ -581,8 +582,10 @@ export class OrbScene {
     const rp = this.ripples[this.rippleIdx];
     rp.set(dir.x * strength, dir.y * strength, dir.z * strength, this.simClock);
     this.rippleIdx = (this.rippleIdx + 1) % this.ripples.length;
-    this.jelly.vx -= dir.x * 2.4 * strength;
-    this.jelly.vy -= dir.y * 2.4 * strength;
+    // a touch leans on the spring over a moment instead of kicking it; dragging adds up gently
+    const push = 2.4 * strength * (strength < 0.9 ? 1 - 0.55 * this.gen.soft : 1);
+    this.jellyPush.x = Math.max(-3.5, Math.min(3.5, this.jellyPush.x - dir.x * push));
+    this.jellyPush.y = Math.max(-3.5, Math.min(3.5, this.jellyPush.y - dir.y * push));
     this.U.uDent.value.set(dir.x, dir.y, dir.z, this.U.uDent.value.w);
     this.disperse = Math.min(1.2, this.disperse + strength);
     this.U.uPoke.value.copy(dir);
@@ -812,10 +815,25 @@ export class OrbScene {
     // spring stiffness per material: pillow's slow cushioned bounce, mercury's quick settle
     this.spring = sp > 0 ? sp : 38;
     const kS = this.spring, cS = (3.2 + 10 * this.gen.sss) * Math.sqrt(kS / 38); // the pillow never bounces
-    j.vx += (-kS * j.x - cS * j.vx) * simDt;
-    j.vy += (-kS * j.y - cS * j.vy) * simDt;
-    j.x += j.vx * simDt;
-    j.y += j.vy * simDt;
+    const steps = 3; // small steps: smooth even when a frame runs long
+    for (let k = 0; k < steps; k++) {
+      const h = simDt / steps;
+      const give = 1 - Math.exp(-h * 13);
+      const px = this.jellyPush.x * give, py = this.jellyPush.y * give;
+      this.jellyPush.x -= px;
+      this.jellyPush.y -= py;
+      j.vx += px + (-kS * j.x - cS * j.vx) * h;
+      j.vy += py + (-kS * j.y - cS * j.vy) * h;
+      j.x += j.vx * h;
+      j.y += j.vy * h;
+    }
+    // it can only stretch so far, approached softly
+    const reach = Math.hypot(j.x, j.y);
+    if (reach > 0.16) {
+      const q = (0.16 + 0.08 * Math.tanh((reach - 0.16) / 0.08)) / reach;
+      j.x *= q;
+      j.y *= q;
+    }
     this.disperse *= Math.exp(-simDt * 0.9);
 
     // framing

@@ -179,8 +179,8 @@ export const MATERIALS: MaterialPreset[] = [
   {
     id: 'jelly', label: 'Jelly', hint: 'Elastic wobble, translucency', group: 'soft', sessionSafe: true,
     swatch: 'linear-gradient(135deg,#ff9ad5,#b48bff)',
-    gen: { ...NONE, origin: 0.55, refract: 0.35, absorb: 1.4, film: 0.4, soft: 1 },
-    physics: { rippleK: 9, rippleSpeed: 0.45, rippleDecay: 1.4, rippleAmp: 0.05, jelly: 1, fluid: 0 },
+    gen: { ...NONE, origin: 0.4, absorb: 1.1, film: 0.15, soft: 1 },
+    physics: { rippleK: 7, rippleSpeed: 0.45, rippleDecay: 1.9, rippleAmp: 0.026, jelly: 1, fluid: 0.35, spring: 26 },
     sound: {
       bed: [{ kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 260 }, gain: 0.06 }],
       event: { voice: 'blob', notes: [110, 130.81, 146.83, 164.81, 196], drop: 1.7, lowpass: 700, decay: 0.5, amp: 0.11, thud: 0.06 },

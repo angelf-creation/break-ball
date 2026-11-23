@@ -124,8 +124,9 @@ float orbRipples(vec3 dir){
     float age = uClock - rp.w;
     if (age < 0.0) continue;
     float d = acos(clamp(dot(rp.xyz / s, dir), -1.0, 1.0));
+    d = sqrt(d * d + 0.012) - 0.11;                     // rounded at the centre: no pointed peak
     float front = age * uRippleParams.y;
-    float mask = 1.0 - smoothstep(front - 0.04, front + 0.06, d);
+    float mask = (1.0 - smoothstep(front - 0.1, front + 0.16, d)) * smoothstep(0.0, 0.22, age); // eases in and out
     h += s * sin(uRippleParams.x * (d - front)) * mask * exp(-age * uRippleParams.z) / (1.0 + d * 5.0);
   }
   return h * uRippleAmp;
@@ -135,8 +136,9 @@ float orbRipples(vec3 dir){
 float orbDisp(vec3 dir){
   float h = orbForm(dir) + orbRipples(dir);
   if (uSquash > 0.002) h += uSquash * (cushionShape(dir) + dentShape(dir));
-  // jelly: spring offset pushes one side in and squashes the other axis
-  h += (dot(dir.xy, uJelly) * 0.5 + length(uJelly) * 0.35 * (dir.z * dir.z - 0.33)) * uJellyAmt;
+  // jelly: spring offset pushes one side in and squashes the other axis (squared, so it passes
+  // through rest smoothly: a plain length has a sharp corner there)
+  h += (dot(dir.xy, uJelly) * 0.5 + dot(uJelly, uJelly) * 1.5 * (dir.z * dir.z - 0.33)) * uJellyAmt;
   // sound: gentle standing waves after Chladni / singing bowls: rings from the front, crossed by
   // a few spokes when a pure tone is playing. Small and slow, never a spike.
   if (uSonicAmt > 0.002 && uSonic.x > 0.002){

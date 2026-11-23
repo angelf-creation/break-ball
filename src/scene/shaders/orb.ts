@@ -526,8 +526,13 @@ void main(){
 #ifdef G_SOFT
   if (uSoft > 0.002){
     float wrap = (dot(N, L) + 0.7) / 1.7;
+    // gel: the pattern is sunk inside and softened; light pools on the side away from the lamp
+    float pool = exp(-sq(length(p - normalize(-L.xy + 1e-3) * 0.5) / 0.55));
+    vec3 gel = palette(0.25 + 0.3 * vDir.y + 0.15 * vDir.x + uTime * 0.006);
+    body = mix(body, gel * (0.4 + 0.5 * T), 0.42);
+    body += gel * pool * 0.32;
     vec3 sss = body * 1.06 * (0.55 + 0.5 * wrap) + mix(body, vec3(1.0), 0.35) * 0.3 * sq(1.0 - NdV)
-             + uLightColor * 0.4 * pow(NdH, 26.0);
+             + mix(uLightColor, vec3(1.0), 0.6) * (0.16 * pow(NdH, 18.0) + 0.25 * pow(NdH, 140.0));
     sss = mix(vec3(lum(sss)), sss, 1.15);
     body = mix(body, sss, uSoft);
   }
@@ -681,7 +686,7 @@ void main(){
   // frost diffuses reflections (frosted, it glows rather than mirrors)
   float gloss = (1.0 - 0.85 * uAperFlat) * (1.0 - uMatte);
   body += gloss * (env(refl) * (0.03 + 0.75 * fres) * (0.35 + 0.65 * max(uRefract, uClarity)) * (1.0 - 0.75 * uResin)
-         + uLightColor * (0.2 * pow(NdH, 70.0) * uOrigin + 1.6 * pow(NdH, 300.0) * (1.0 - uOrigin)));
+         + uLightColor * (0.2 * pow(NdH, 70.0) * uOrigin + 1.6 * pow(NdH, 300.0) * (1.0 - uOrigin)) * (1.0 - 0.75 * uSoft));
   // Pashgian: very high polish, a tight bright highlight and a crisp reflection at the rim
   body += uResin * (uLightColor * 2.4 * pow(NdH, 900.0) + env(refl) * 0.35 * fres);
 
