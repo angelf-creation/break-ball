@@ -83,7 +83,7 @@ varying vec3 vN;
 // pattern; they mirror each other, so the two halves meet without a seam.
 vec2 discMap(vec3 d){
   float th = acos(clamp(abs(d.z), 0.0, 1.0));
-  float f = 0.35 * sin(th) + 0.65 * th / 1.5707963;
+  float f = 0.85 * sin(th) + 0.15 * th / 1.5707963;
   return d.xy / max(length(d.xy), 1e-4) * f;
 }
 // A point on the view disc, on the near (+1) or far (-1) wall -> pattern disc.
@@ -585,11 +585,14 @@ void main(){
     float tip = smoothstep(lead - 0.16, lead - 0.02, ord) * seen;  // the advancing front
     vec3 amber = mix(vec3(0.95, 0.3, 0.025), vec3(0.5, 0.07, 0.005), smoothstep(0.1, 1.0, rl));
     amber *= 0.75 + 0.25 * fbm(rq * 2.2 + uTime * 0.02);
+    amber *= 0.9 + 0.16 * snoise(rq * 26.0) + 0.1 * snoise(rq * 90.0);  // grain, like lit resin
     amber += vec3(1.0, 0.6, 0.2) * 0.35 * exp(-rl * rl * 5.0);
     amber *= 1.0 - 0.6 * clamp(seenB * 1.6, 0.0, 1.0);            // the branches shade the ground around them
     // relief: light falls across the branches
     vec2 gr = vec2(texture2D(uRootTex, ruv + vec2(0.0024, 0.0), 1.0).g, texture2D(uRootTex, ruv + vec2(0.0, 0.0024), 1.0).g) - texture2D(uRootTex, ruv, 1.0).g;
     vec3 bark = mix(vec3(0.085, 0.018, 0.008), vec3(0.3, 0.075, 0.02), clamp(0.5 - (gr.x - gr.y) * 1.6, 0.0, 1.0));
+    float fibre = snoise(vec2(dot(rq, vec2(gr.y, -gr.x) * 40.0 + 1.0) * 14.0, ord * 90.0)) * 0.5 + snoise(rq * 70.0) * 0.5;
+    bark *= 0.8 + 0.4 * fibre;                                     // fibrous, weathered
     bark = mix(bark, vec3(0.75, 0.22, 0.04), tip * 0.8);
     float sap = 0.65 + 0.35 * sin(ord * 34.0 - uTime * 0.9);       // light travelling out along the channels
     float chan = rt.b * seen;

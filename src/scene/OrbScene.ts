@@ -114,7 +114,7 @@ export class OrbScene {
   private disperse = 0;
   private ripples = Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, -100)); // xyz = dir * strength, w = start
   private rippleIdx = 0;
-  private drag = { active: false, lastT: 0, last: new THREE.Vector3(0, 0, 1), id: -1, x: 0, y: 0, t: 0, onBall: false, hover: false, hx: 0, hy: 0 };
+  private drag = { active: false, lastT: 0, last: new THREE.Vector3(0, 0, 1), id: -1, x: 0, y: 0, t: 0, onBall: false };
 
   private U = {
     uTime: { value: 0 },
@@ -253,7 +253,7 @@ export class OrbScene {
   private creatures = new Map<CreatureKey, Creature>();
   private crackIdx = 0;
   private growT = 0;
-  /** rotation: orientation lives in group.quaternion; spin is a world-space angular velocity (rad/s) */
+  /** how fast it is tilting (rad/s), for light and water that lag behind */
   private spin = new THREE.Vector3();
   private idle = 99;
   private rest = new THREE.Quaternion();
@@ -604,34 +604,22 @@ export class OrbScene {
     this.video.resumeOnGesture();
   }
 
-  /** Pixels -> radians: dragging across the ball's radius turns it by about one radian. */
+  /** Pixels -> radians: dragging across the ball's radius asks for about one radian. */
   private pxToRad(): number {
     return 1 / Math.max(60, this.orbCss.r > 0 ? this.orbCss.r : 200);
   }
   private tmpQ = new THREE.Quaternion();
   private tmpE = new THREE.Euler();
   private lean = new THREE.Vector2();
-  private swayClock = 0;
   private floatClock = 0;
-  private tmpAxis = new THREE.Vector3();
-  /**
-   * Turn the ball by a small screen-space movement. The rotation is a delta about the
-   * camera's own right / up axes, premultiplied onto the orientation quaternion: there
-   * are no Euler angles to clamp or flip, so it can go round any number of times.
-   */
+  /** what the hand asks for (unbounded), and the bounded tilt that answers it */
+  private ask = { yaw: 0, pitch: 0 };
+  private hoverAsk = { yaw: 0, pitch: 0 };
+  private tilt = { yaw: 0, pitch: 0 };
   private turn(dx: number, dy: number) {
-    const ang = Math.hypot(dx, dy);
-    if (ang < 1e-6) return;
-    this.tmpAxis.set(dy / ang, dx / ang, 0).applyQuaternion(this.camera.quaternion);
-    this.tmpQ.setFromAxisAngle(this.tmpAxis, ang);
-    this.group.quaternion.premultiply(this.tmpQ).normalize();
-  }
-  /** Add angular velocity (rad/s) from a screen-space movement. */
-  private push(vx: number, vy: number) {
-    this.tmpAxis.set(vy, vx, 0).applyQuaternion(this.camera.quaternion);
-    this.spin.add(this.tmpAxis);
-    const max = 5;
-    if (this.spin.length() > max) this.spin.setLength(max);
+    const lim = (v: number) => Math.max(-2.4, Math.min(2.4, v));
+    this.ask.yaw = lim(this.ask.yaw + dx);
+    this.ask.pitch = lim(this.ask.pitch + dy);
   }
 
   private onDown = (e: PointerEvent) => {
@@ -647,7 +635,6 @@ export class OrbScene {
     d.y = e.clientY;
     d.t = e.timeStamp;
     d.onBall = !!hit;
-    this.spin.multiplyScalar(0.15); // catching the ball stops it
     this.idle = 0;
     if (!hit) return;
     this.pressed = true;
@@ -668,10 +655,6 @@ export class OrbScene {
     d.t = e.timeStamp;
     this.idle = 0;
     this.turn(dx, dy);
-    // remember the hand's speed, so letting go carries on from it
-    const s = 1 - Math.exp(-dtm * 18);
-    this.tmpAxis.set(dy / dtm, dx / dtm, 0).applyQuaternion(this.camera.quaternion);
-    this.spin.lerp(this.tmpAxis, s);
     if (!d.onBall) return;
     const hit = this.hitTest(e.clientX, e.clientY);
     if (!hit) return;
@@ -687,27 +670,23 @@ export class OrbScene {
   private onUp = (e: PointerEvent) => {
     const d = this.drag;
     if (e.pointerId !== d.id) return;
-    // held still before letting go: no throw
-    if (e.timeStamp - d.t > 90) this.spin.multiplyScalar(0.1);
-    if (this.spin.length() > 4) this.spin.setLength(4);
     d.active = false;
     d.id = -1;
-    d.hover = false;
     this.pressed = false;
   };
 
   private onLeave = () => {
-    this.drag.hover = false;
+    this.hoverAsk.yaw = this.hoverAsk.pitch = 0;
   };
 
-  /** Trackpad: two-finger scroll turns the ball (pinch is left alone). */
+  /** Trackpad: two-finger scroll tilts the ball (pinch is left alone). */
   private onWheel = (e: WheelEvent) => {
     if (e.ctrlKey) return;
     e.preventDefault();
     const unit = e.deltaMode === 1 ? 16 : 1;
-    const k = this.pxToRad() * 2.2;
+    const k = this.pxToRad() * 0.5;
     const lim = (v: number) => Math.max(-60, Math.min(60, v * unit));
-    this.push(-lim(e.deltaX) * k, -lim(e.deltaY) * k);
+    this.turn(-lim(e.deltaX) * k, -lim(e.deltaY) * k);
     this.idle = 0;
   };
 
@@ -715,18 +694,9 @@ export class OrbScene {
     this.pointer.tx = (e.clientX / window.innerWidth) * 2 - 1;
     this.pointer.ty = -((e.clientY / window.innerHeight) * 2 - 1);
     if (e.pointerType !== 'mouse') return;
-    const d = this.drag;
-    const over = e.target === this.renderer.domElement;
-    // moving the mouse over the scene (no button) nudges the ball, so it follows gently
-    if (over && d.hover && !d.active) {
-      const k = this.pxToRad() * (store.get().reducedMotion ? 0.25 : 0.9);
-      const lim = (v: number) => Math.max(-40, Math.min(40, v));
-      this.push(lim(e.clientX - d.hx) * k, lim(e.clientY - d.hy) * k);
-      this.idle = Math.min(this.idle, 1);
-    }
-    d.hover = over;
-    d.hx = e.clientX;
-    d.hy = e.clientY;
+    const k = e.target === this.renderer.domElement ? 1 : 0;
+    this.hoverAsk.yaw = this.pointer.tx * 0.2 * k;
+    this.hoverAsk.pitch = -this.pointer.ty * 0.13 * k;
   };
 
   // ---------- time / light ----------
@@ -890,30 +860,29 @@ export class OrbScene {
       this.applyViewOffset();
     }
 
-    // ---- rotation ----
-    // Orientation is a quaternion, changed only by small deltas. While a hand is on it the
-    // pointer turns it directly; otherwise its angular velocity carries on, damps smoothly,
-    // and after a few idle seconds the ball drifts back toward facing you, swaying.
+    // ---- tilt ----
+    // A bounded, gentle turn: the hand may ask for more, but the answer eases toward a limit
+    // (about 30 degrees to either side, 20 up and down), so a scene is never seen from behind.
+    // Let go and it comes calmly back to face you, with a slow sway of its own.
     this.idle += dt;
-    const still = reduced ? 0.25 : this.motion;
     if (!this.drag.active) {
-      const sp = this.spin.length();
-      if (sp > 1e-4) {
-        this.tmpAxis.copy(this.spin).divideScalar(sp);
-        this.tmpQ.setFromAxisAngle(this.tmpAxis, sp * dt);
-        this.group.quaternion.premultiply(this.tmpQ);
-      }
-      this.spin.multiplyScalar(Math.exp(-dt * 1.15));
-      const back = Math.min(1, Math.max(0, (this.idle - 4) / 4));
-      if (back > 0) {
-        const c = this.swayClock += dt * back * still * (0.45 + 0.55 * this.pace);
-        const amt = reduced ? 0.12 : 1;
-        this.tmpE.set(-ELEV + 0.11 * Math.sin(c * 0.31) * amt, 0.42 * Math.sin(c * 0.23) * amt, 0.06 * Math.sin(c * 0.19 + 1) * amt);
-        this.tmpQ.setFromEuler(this.tmpE);
-        this.group.quaternion.slerp(this.tmpQ, 1 - Math.exp(-dt * 0.5 * back));
-      }
-      this.group.quaternion.normalize();
+      const back = Math.exp(-dt * (reduced ? 2 : 0.75));
+      this.ask.yaw *= back;
+      this.ask.pitch *= back;
     }
+    const quiet = reduced ? 0.15 : 1;
+    const soft = (v: number, max: number) => max * Math.tanh(v / max);
+    const sw = this.floatClock;
+    const yawT = soft(this.ask.yaw + this.hoverAsk.yaw * quiet, 0.5) + 0.085 * Math.sin(sw * 0.31) * quiet;
+    const pitchT = soft(this.ask.pitch + this.hoverAsk.pitch * quiet, 0.34) + 0.045 * Math.sin(sw * 0.23 + 1) * quiet;
+    const prevYaw = this.tilt.yaw, prevPitch = this.tilt.pitch;
+    const ease = this.drag.active ? 7 : 2.2;
+    this.tilt.yaw = damp(this.tilt.yaw, yawT, ease, dt);
+    this.tilt.pitch = damp(this.tilt.pitch, pitchT, ease, dt);
+    if (dt > 0) this.spin.set((this.tilt.pitch - prevPitch) / dt, (this.tilt.yaw - prevYaw) / dt, 0);
+    // rest faces the camera; tilt is applied about the camera's own axes
+    this.tmpE.set(this.tilt.pitch, this.tilt.yaw, 0.02 * Math.sin(sw * 0.19) * quiet, 'YXZ');
+    this.group.quaternion.copy(this.rest).multiply(this.tmpQ.setFromEuler(this.tmpE));
     // baseline motion: a slow float and a breath of its own (the pillow lies heavier)
     const heavy = 1 - 0.85 * this.gen.sss;
     const lively = (reduced ? 0.2 : 1) * heavy * (0.4 + 0.6 * this.motion);
@@ -1006,7 +975,7 @@ export class OrbScene {
         this.group.add(c.group);
       }
       if (!c) continue;
-      c.setWeight(Math.min(1, w * 1.02));
+      c.setWeight(Math.min(1, w * 1.02), dt);
       creature += w;
       if (w > 0.002 && (key === 'nebula' || key === 'crack')) {
         c.group.updateMatrixWorld(true);
@@ -1096,7 +1065,7 @@ export class OrbScene {
       this.armSway.y = damp(this.armSway.y, Math.max(-1.2, Math.min(1.2, this.spin.x * 0.6)), 0.9, dt);
       U.uArmSway.value.copy(this.armSway);
       const m = this.creatures.get('emit');
-      if (m) m.group.position.y = BASE_R * (0.2 + 0.06 * U.uPulse.value);
+      if (m) m.group.position.y = BASE_R * 0.02 * U.uPulse.value;
     }
 
     // generator 5: volumetric scatter
@@ -1129,7 +1098,7 @@ export class OrbScene {
     U.uFieldTime.value = this.fieldTime;
     // the deep sea: bioluminescence looks best in the dark, so the field dims under medusa
     // deep space / deep sea: the field dims for the nebula and the medusa
-    U.uFieldLevel.value = (1 - 0.75 * Math.max(g.emit, g.petal, g.gill, g.facet * 0.6)) * (1 - 0.85 * g.nebula) * (0.034 + 0.026 * f.glow / 0.38) * (0.55 + 0.45 * this.lightInt) * (1 - ganz * 0.5);
+    U.uFieldLevel.value = (1 - 0.75 * Math.max(g.emit, g.petal, g.gill)) * (1 - 0.85 * g.nebula) * (0.034 + 0.026 * f.glow / 0.38) * (0.55 + 0.45 * this.lightInt) * (1 - ganz * 0.5);
     this.paletteJS(this.patternTime * 0.03 + 0.4, U.uBleed.value).multiply(lightK);
     U.uBleedAmt.value = (0.055 + f.glow * 0.12) * (1 - 0.6 * Math.max(g.emit, g.nebula, g.petal, g.gill)) + this.sessionW * (0.02 + 0.04 * this.breath) + fogAmt * 0.03 + this.holdW * 0.05;
     this.updateOrbScreen();

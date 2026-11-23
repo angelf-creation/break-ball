@@ -137,7 +137,7 @@ function DesktopHUD() {
 
       <div className="absolute bottom-6 left-6 z-10 flex flex-col gap-1.5">
         <Dimmable className="pointer-events-none">
-          <div className="title-shadow text-[12px] text-white/60 tracking-wide">Drag to turn the ball · click to touch it</div>
+          <div className="title-shadow text-[12px] text-white/60 tracking-wide">Drag to tilt the ball · click to touch it</div>
         </Dimmable>
       </div>
     </>

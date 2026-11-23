@@ -1,9 +1,8 @@
 import { NOISE, LOOK, FIELD } from './chunks';
 
 /**
- * Shaders for the modelled scenes (scene/creatures.ts). Unlike the orb's skin these
- * are real geometry (petals, caps, arms, crystals) or ray-cast volumes (space, ice),
- * so they can be turned through a full 360 degrees.
+ * Shaders for the modelled scenes (scene/creatures.ts): photographs given depth (orchid,
+ * mushroom, medusa, space), and ray-cast ice.
  */
 const COMMON = /* glsl */ `
 ${NOISE}
@@ -38,428 +37,168 @@ varying vec3 vN;
 varying vec2 vUv2;
 `;
 
-// ------------------------------------------------------------------ orchid
-export const orchidVert = /* glsl */ `
-uniform float uTime;
-uniform float uOpen;
-uniform vec3 uHinge;   // axis the petal folds around
-uniform float uFold;   // how far it folds when the bloom is shut
-uniform float uPhase;
-${PASS}
-mat3 rotA(vec3 a, float t){
-  float c = cos(t), s = sin(t), k = 1.0 - c;
-  return mat3(a.x*a.x*k+c, a.x*a.y*k+a.z*s, a.x*a.z*k-a.y*s,
-              a.x*a.y*k-a.z*s, a.y*a.y*k+c, a.y*a.z*k+a.x*s,
-              a.x*a.z*k+a.y*s, a.y*a.z*k-a.x*s, a.z*a.z*k+c);
-}
-void main(){
-  float o = uOpen * uOpen * (3.0 - 2.0 * uOpen);
-  float ang = (1.0 - o) * uFold + 0.045 * sin(uTime * 0.5 + uPhase) * o;
-  mat3 m = rotA(uHinge, ang);
-  vec3 p = m * position * (0.45 + 0.55 * o);
-  // the outer half of each petal breathes a little later than its base
-  p.z += 0.03 * sin(uTime * 0.6 + uPhase - length(position.xy) * 2.0) * dot(position.xy, position.xy) * 0.4;
-  vUv2 = uv;
-  vec4 w = modelMatrix * vec4(p, 1.0);
-  vWorld = w.xyz;
-  vN = mat3(modelMatrix) * (m * normal);
-  gl_Position = projectionMatrix * viewMatrix * w;
-}`;
-export const orchidFrag = /* glsl */ `
-${COMMON}
-uniform float uKind; // 0 dorsal, 1 petal, 2 lateral, 3 lip, 4 side ribbon, 5 column, 6 zebra heart, 7 furred bead
-float spots(vec2 q, float sz){
-  vec2 n = floor(q), f = fract(q); float m = 0.0;
-  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
-    vec2 g = vec2(float(i), float(j));
-    vec2 h = hash22(n + g);
-    vec2 dv = g + 0.2 + 0.6 * h - f;
-    float r = sz * (0.5 + 0.7 * h.x);
-    m = max(m, 1.0 - smoothstep(r * 0.8, r, length(dv * vec2(1.15, 0.85 + 0.3 * h.y))));
-  }
-  return m;
-}
-// thin dark lines: 1 on the line
-float lines(float x, float w){
-  float d = abs(fract(x) - 0.5), fw = fwidth(x);
-  return (1.0 - smoothstep(w, w + fw * 1.2 + 0.02, d)) * (1.0 - smoothstep(0.35, 0.8, fw));
-}
-void main(){
-  vec3 N = faceN(), V = normalize(cameraPosition - vWorld), L = normalize(uLightDir);
-  float u = vUv2.x * 2.0 - 1.0, t = vUv2.y, au = abs(u);
-  float wob = 0.06 * snoise(vec2(u * 2.0, t * 3.0)) + 0.02 * snoise(vec2(u * 8.0, t * 11.0));
-  vec3 ink = vec3(0.045, 0.002, 0.022);
-  vec3 c;
-  if (uKind < 0.5){                               // dorsal sepal: green rib, gold, pink margins, fine stripes
-    c = mix(vec3(0.16, 0.4, 0.03), vec3(0.72, 0.5, 0.1), smoothstep(0.05, 0.3, au + wob));
-    c = mix(c, vec3(0.78, 0.32, 0.26), smoothstep(0.3, 0.6, au + wob * 2.0));
-    c = mix(c, vec3(0.6, 0.02, 0.28), smoothstep(0.62, 0.95, au + 0.15 * t + wob));
-    c = mix(c, vec3(0.35, 0.36, 0.03), (1.0 - smoothstep(0.1, 0.4, t)) * 0.7);
-    c = mix(c, vec3(0.28, 0.01, 0.06), lines((u + wob * 0.4) * 8.0, 0.1) * 0.85);
-    c = mix(c, ink, spots(vec2(u * 5.0, t * 10.0), 0.36) * (1.0 - smoothstep(0.1, 0.42, au)) * smoothstep(0.1, 0.2, t) * (1.0 - smoothstep(0.62, 0.72, t)));
-    c = mix(c, vec3(0.3, 0.0, 0.16), spots(vec2(u * 6.0 + 3.0, t * 9.0), 0.22) * smoothstep(0.6, 0.8, au) * 0.7);
-  } else if (uKind < 1.5){                        // petals: blue heart, violet-magenta margins, dark fanned veins
-    float mid = exp(-sq((u + 0.1 - wob) / 0.16));
-    c = mix(vec3(0.16, 0.2, 0.58), vec3(0.28, 0.07, 0.55), smoothstep(-0.1, 0.75, snoise(vec2(u * 1.3, t * 1.8)) + au * 0.6));
-    c = mix(c, vec3(0.1, 0.27, 0.6), 0.6 * smoothstep(0.1, 0.5, t) * (1.0 - smoothstep(0.55, 0.85, t)) * (1.0 - au));
-    c = mix(c, vec3(0.6, 0.03, 0.52), smoothstep(0.58, 0.98, t + 0.15 * au + wob) * 0.85);
-    c = mix(c, vec3(0.62, 0.48, 0.72), mid * smoothstep(0.1, 0.4, t) * 0.65);
-    c = mix(c, vec3(0.62, 0.3, 0.36), (1.0 - smoothstep(0.0, 0.3, t)) * 0.45);
-    c = mix(c, vec3(0.06, 0.2, 0.03), exp(-sq((u + 0.02) / 0.075)) * (1.0 - smoothstep(0.35, 0.75, t)));
-    // veins fan out from the foot and fork toward the rim
-    float fan = u / (0.22 + 0.8 * t) * 6.0 + u * t * 5.0 + wob * 5.0;
-    float edgeW = smoothstep(0.25, 0.8, max(au, t));
-    c = mix(c, vec3(0.1, 0.0, 0.13), lines(fan, 0.05 + 0.04 * edgeW) * (0.35 + 0.5 * edgeW));
-    c = mix(c, vec3(0.12, 0.0, 0.15), lines(fan * 2.0 + 0.25 + 0.6 * wob, 0.07) * smoothstep(0.55, 0.85, max(au, t)) * 0.75);
-    float base = 1.0 - smoothstep(0.3, 0.55, t);
-    c = mix(c, vec3(0.16, 0.0, 0.05), spots(vec2(u * 5.5, t * 8.0), 0.36) * base * smoothstep(0.12, 0.3, au));
-  } else if (uKind < 2.5){                        // drooping sepals: gold, green rib, violet shoulders, dotted stripes
-    c = mix(vec3(0.75, 0.5, 0.03), vec3(0.5, 0.45, 0.1), t);
-    c = mix(c, vec3(0.5, 0.2, 0.22), smoothstep(0.35, 0.7, au + wob));
-    c = mix(c, vec3(0.3, 0.05, 0.4), smoothstep(0.2, 0.9, u * sign(u) * 0.6 + t * 0.5 + wob * 3.0) * 0.75);
-    c = mix(c, vec3(0.07, 0.36, 0.04), exp(-sq((u - 0.08) / 0.14)) * smoothstep(0.1, 0.4, t) * 0.9);
-    float st = lines((u + wob * 0.5) * 6.5, 0.1);
-    c = mix(c, vec3(0.14, 0.0, 0.05), st * (0.45 + 0.55 * smoothstep(-0.2, 0.3, sin(t * 60.0 + u * 9.0))));
-    c = mix(c, vec3(0.16, 0.0, 0.14), spots(vec2(u * 4.0, t * 7.0), 0.28) * smoothstep(0.3, 0.6, au) * 0.6);
-  } else if (uKind < 3.5){                        // the lip: olive gold margins, dark violet heart, leopard spots
-    float n1 = snoise(vec2(u, t) * 2.2), n2 = fbm(vec2(u * 2.0 + 4.0, t * 3.0));
-    c = mix(vec3(0.42, 0.3, 0.1), vec3(0.1, 0.012, 0.08), smoothstep(0.25, 0.75, 0.45 + 0.5 * n2 + 0.25 * smoothstep(0.2, 0.7, t)));
-    c = mix(c, vec3(0.42, 0.34, 0.3), exp(-sq(u / 0.24)) * smoothstep(0.25, 0.4, t) * (1.0 - smoothstep(0.7, 0.9, t)) * 0.75);
-    c = mix(c, vec3(0.34, 0.02, 0.24), exp(-sq((au - 0.18) / 0.14)) * smoothstep(0.6, 0.85, t) * 0.8);
-    c = mix(c, vec3(0.3, 0.33, 0.07), smoothstep(0.72, 0.98, max(au, t * 0.97) + 0.05 * n1));
-    c = mix(c, vec3(0.5, 0.24, 0.08), smoothstep(0.1, 0.4, n1) * (1.0 - smoothstep(0.5, 0.8, t)) * 0.5);
-    vec2 q = vec2(u * 8.0, t * 11.0) + 0.35 * vec2(snoise(vec2(u, t) * 4.0), snoise(vec2(t, u) * 4.0));
-    c = mix(c, vec3(0.012, 0.004, 0.008), spots(q, 0.47) * (1.0 - smoothstep(0.93, 1.0, max(au, t))));
-    c = mix(c, vec3(0.62, 0.5, 0.42), lines(t * 13.0 + au * 2.0, 0.22) * exp(-sq(u / 0.055)) * smoothstep(0.5, 0.65, t) * 0.8);
-  } else if (uKind < 4.5){                        // side ribbons: hot magenta, violet inside, white rolled edge
-    c = mix(vec3(0.3, 0.05, 0.5), vec3(0.68, 0.04, 0.5), smoothstep(0.15, 0.6, t));
-    c = mix(c, vec3(0.42, 0.06, 0.16), smoothstep(0.82, 1.0, t));
-    c = mix(c, vec3(0.2, 0.0, 0.2), lines(u * 4.0 + wob * 3.0, 0.06) * 0.4);
-    c += vec3(0.25, 0.14, 0.3) * smoothstep(0.75, 1.0, au);
-  } else if (uKind < 5.5){
-    c = mix(vec3(0.78, 0.6, 0.1), vec3(0.95, 0.88, 0.55), t);
-    c = mix(c, vec3(0.8, 0.9, 0.75), smoothstep(0.75, 1.0, t) * 0.6);
-  } else if (uKind < 6.5){                        // zebra heart: black bands swirling over gold and rust
-    float z = sin(t * 22.0 + 5.0 * au + 3.2 * snoise(vec2(u * 1.6, t * 2.0)) + 1.5 * snoise(vec2(u * 4.0, t * 5.0)));
-    c = mix(vec3(0.6, 0.42, 0.14), vec3(0.45, 0.14, 0.03), 0.5 + 0.5 * snoise(vec2(u, t) * 2.0));
-    c = mix(c, vec3(0.012, 0.004, 0.006), smoothstep(-0.12, 0.12, z));
-  } else {
-    float fur = snoise(vec2(u * 26.0, t * 8.0)) * 0.5 + snoise(vec2(u * 60.0, t * 14.0)) * 0.5;
-    c = mix(vec3(0.02, 0.015, 0.03), vec3(0.35, 0.28, 0.3), smoothstep(0.1, 0.7, fur));
-  }
-  float ndv = clamp(dot(N, V), 0.0, 1.0);
-  float wrap = clamp((dot(N, L) + 0.45) / 1.45, 0.0, 1.0);
-  float back = clamp(dot(-N, L), 0.0, 1.0);
-  // glistening cells and fine fibres
-  float fine = snoise(vec2(u * 70.0, t * 12.0)) * 0.08;
-  float gl = hash12(floor(vec2(u, t) * 240.0));
-  vec3 col = c * (0.12 + 0.92 * wrap + 0.35 * back) * (1.0 + fine);
-  vec3 H = normalize(L + V);
-  float nh = clamp(dot(N, H), 0.0, 1.0);
-  col += c * 0.45 * pow(nh, 14.0) + vec3(0.16) * pow(nh, 50.0);
-  col += (c + 0.08) * smoothstep(0.93, 1.0, gl) * (0.15 + 0.7 * pow(nh, 6.0)) * (1.0 - smoothstep(0.002, 0.006, fwidth(t)));
-  // a thin bright rim along every edge, lit from behind
-  if (uKind < 4.5){
-    float ed = smoothstep(0.955, 1.0, max(au, t));
-    col += mix(c * 2.0, vec3(0.8, 0.8, 0.85), 0.45) * ed * 0.55;
-  }
-  col += mix(c, vec3(0.6, 0.5, 0.8), 0.4) * pow(1.0 - ndv, 3.0) * 0.5;
-  col *= mix(0.35, 1.0, smoothstep(0.0, 0.16, t + (uKind > 4.5 ? 1.0 : 0.0)));
-  gl_FragColor = vec4(graded(col * 1.15), uW);
-}`;
-
-// ------------------------------------------------------------------ mushroom
-export const mushVert = /* glsl */ `
-uniform float uTime;
-uniform float uBreath;
-uniform vec2 uJelly;
-attribute float aSeed;
-${PASS}
-varying float vSeed;
-varying float vHeight;
-void main(){
-  vec3 p = position;
-  // the cluster sways from its base, each cap a little out of step
-  float h = clamp((p.y + 1.1) / 2.0, 0.0, 1.2);
-  p.x += h * h * (0.045 * sin(uTime * 0.55 + aSeed * 5.0) + uJelly.x * 0.35);
-  p.z += h * h * (0.035 * cos(uTime * 0.47 + aSeed * 4.0));
-  p.y += h * 0.02 * sin(uTime * 0.6 + aSeed * 6.0) + h * uJelly.y * 0.2;
-  vUv2 = uv; vSeed = aSeed; vHeight = h;
-  vec4 w = modelMatrix * vec4(p, 1.0);
-  vWorld = w.xyz;
-  vN = mat3(modelMatrix) * normal;
-  gl_Position = projectionMatrix * viewMatrix * w;
-}`;
-export const mushFrag = /* glsl */ `
-${COMMON}
-uniform float uKind; // 0 cap, 1 stem
-varying float vSeed;
-varying float vHeight;
-void main(){
-  vec3 N = faceN(), V = normalize(cameraPosition - vWorld), L = normalize(uLightDir);
-  float ndv = clamp(dot(N, V), 0.0, 1.0);
-  float wrap = clamp((dot(N, L) + 0.6) / 1.6, 0.0, 1.0);
-  vec3 col;
-  if (uKind < 0.5){
-    float a = vUv2.x, r = vUv2.y;                 // around the fan, stem -> rim
-    // gills: real ridges in the geometry plus finer ones between them, forking toward the rim
-    float gx = a * 110.0 + 0.5 * snoise(vec2(a * 14.0, r * 3.0));
-    float g1 = pow(0.5 + 0.5 * cos(gx), 1.6);
-    float g2 = sq(0.5 + 0.5 * cos(gx * 2.0 + 1.0)) * smoothstep(0.45, 0.7, r);
-    float g = mix(max(g1, g2 * 0.8), 0.45, smoothstep(0.6, 1.8, fwidth(gx)));
-    vec3 deep = mix(vec3(0.005, 0.05, 0.12), vec3(0.0, 0.1, 0.13), vSeed);
-    vec3 lit = mix(vec3(0.12, 0.5, 0.72), vec3(0.16, 0.58, 0.68), fract(vSeed * 3.7));
-    lit = mix(lit, vec3(0.55, 0.75, 0.82), smoothstep(0.45, 0.95, r) * 0.5);   // ridges pale toward the rim
-    if (gl_FrontFacing){
-      col = mix(deep, lit, g) * (0.3 + 0.95 * wrap);
-      col += vec3(0.02, 0.16, 0.24) * (1.0 - r) * 0.4;
-      col = mix(col, vec3(0.62, 0.42, 0.26) * (0.12 + 0.95 * g) * (0.3 + 0.7 * wrap), 1.0 - smoothstep(0.05, 0.42, r)); // gills run down into the tan stem
-    } else {
-      // the cap's back: smooth, dusky blue
-      float st = snoise(vec2(a * 30.0, r * 2.0)) * 0.5 + 0.5;
-      col = mix(vec3(0.02, 0.09, 0.16), vec3(0.06, 0.24, 0.32), st * r) * (0.35 + 0.9 * wrap);
-    }
-    // glowing rim: orange at the very edge, cyan just inside it
-    float wob = 0.012 * snoise(vec2(a * 40.0, uTime * 0.1));
-    float e1 = smoothstep(0.972, 0.995, r + wob);
-    float e2 = exp(-sq((r - 0.93 + wob) / 0.03));
-    float br = 0.8 + 0.3 * sin(uTime * 0.5 + a * 4.0 + vSeed * 9.0);
-    col += vec3(1.0, 0.38, 0.07) * e1 * 2.0 * br + vec3(0.1, 0.8, 1.0) * e2 * 0.8 * br;
-    col += vec3(1.0, 0.36, 0.08) * 0.22 * smoothstep(0.7, 1.0, r);  // it spills a little onto the gills
-    col += vec3(0.1, 0.55, 0.75) * pow(1.0 - ndv, 3.0) * 0.4;
-  } else {
-    float f = 0.5 + 0.5 * sin(vUv2.x * 6.2831853 * 14.0 + 3.0 * snoise(vec2(vUv2.y * 5.0, vSeed * 9.0)));
-    col = mix(vec3(0.33, 0.19, 0.09), vec3(0.72, 0.52, 0.32), f * 0.5 + 0.5 * wrap);
-    col *= 0.22 + 0.9 * wrap;
-    col = mix(col, vec3(0.03, 0.2, 0.28), smoothstep(0.75, 1.0, vUv2.y) * 0.5);
-    col += vec3(1.0, 0.6, 0.3) * pow(1.0 - ndv, 3.0) * 0.28;
-  }
-  col *= 0.45 + 0.55 * smoothstep(0.0, 0.5, vHeight);                // the base falls into shade
-  gl_FragColor = vec4(graded(col), uW);
-}`;
-
-// ------------------------------------------------------------------ medusa
-const MEDUSA = /* glsl */ `
+// ------------------------------------------------------------------ photo orbs
+// A photograph given real depth: a fine grid, domed like the ball and raised by a relief
+// map (scene/photoRelief.ts), re-lit as it tilts. Nothing is repainted: the picture's own
+// colour and detail are what you see.
+export const photoVert = /* glsl */ `
 uniform float uTime;
 uniform float uPulse;
+uniform float uOpen;
 uniform vec2 uArmSway;
-// bell: s 0 crown .. 1 margin .. 1.25 curled under; pulse squeezes it narrow and tall
-vec3 bellP(float s, float a, float pulse){
-  float late = pulse * mix(0.55, 1.0, min(s, 1.0));
-  float R = mix(1.1, 0.76, late), H = mix(0.4, 0.66, pulse);
-  float ss = min(s, 1.0);
-  float x = R * pow(sin(ss * 1.5708), 0.92);
-  float y = H * cos(ss * 1.5708);
-  float scal = cos(a * 16.0);
-  if (s > 1.0){ float k = s - 1.0; x -= R * k * 0.75; y -= k * 0.42; }
-  float m = smoothstep(0.75, 1.0, s);
-  x += m * 0.02 * scal + m * 0.06 * (1.0 - 1.6 * pulse);
-  y += m * 0.018 * scal - m * 0.04 + m * 0.025 * sin(a * 3.0 + uTime * 0.4);
-  x *= 1.0 + 0.02 * sin(a * 5.0 + uTime * 0.3) * m;
-  return vec3(cos(a) * x, y + 0.34, sin(a) * x);
-}
-vec2 drift(float v, float ph){
-  // water: slow waves travelling down, larger toward the ends; they lag behind the pointer
+uniform float uScene;   // 0 orchid, 1 mushroom, 2 medusa
+uniform sampler2D uRelief;
+uniform float uDepth;   // how far the relief stands out
+uniform vec2 uJelly;
+uniform vec4 uDent;
+varying vec3 vWorld;
+varying vec3 vN;
+varying vec2 vUv2;
+varying float vRad;
+varying vec3 vObjP;
+float reliefAt(vec2 uv){ return texture2D(uRelief, uv).r; }
+vec3 place(vec2 uv){
+  vec2 p = uv * 2.0 - 1.0;
+  float r2 = min(dot(p, p), 1.0);
+  float h = reliefAt(uv);
   float t = uTime;
-  return v * (0.13 * vec2(sin(t * 0.75 - v * 3.2 + ph), cos(t * 0.62 - v * 2.7 + ph * 1.3)) + vec2(uArmSway.x * 0.45 * v, uArmSway.y * 0.3 * v));
+  // the picture is wrapped over the ball, not laid flat in it: it swells toward you in the
+  // middle, rolls away round the sides, and its outer parts curl slowly like an ornament
+  float rr = sqrt(r2);
+  float curl = r2 * (0.16 + 0.1 * sin(t * 0.17)) * (p.x > 0.0 ? 1.0 : -1.0) * smoothstep(0.0, 0.5, abs(p.x)) + 0.05 * r2 * sin(t * 0.23);
+  float cc = cos(curl), cs = sin(curl);
+  vec2 w0 = mat2(cc, cs, -cs, cc) * p;
+  float th = rr * 1.42;                                  // angle round the ball
+  vec2 wp = w0 / max(rr, 1e-4) * mix(rr, sin(th), 0.6) * (uScene > 1.5 ? 1.04 : 1.17);
+  vec3 q = vec3(wp, 0.72 * cos(th) - 0.3 + h * uDepth * (1.0 - 0.45 * r2));
+  if (uScene < 0.5){
+    // the bloom breathes; its outer edges lift and settle a little out of step
+    float r = length(p), a = atan(p.y, p.x);
+    float o = uOpen * uOpen * (3.0 - 2.0 * uOpen);
+    q.xy *= (0.88 + 0.12 * o) * (1.0 + 0.010 * sin(t * 0.55 - r * 2.4));
+    q.z += 0.045 * r * r * sin(t * 0.42 + a * 2.0) - 0.25 * (1.0 - o) * r * r;
+  } else if (uScene < 1.5){
+    // swaying from its foot, the high caps most
+    float k = clamp((p.y + 0.85) / 1.7, 0.0, 1.0); k *= k;
+    q.x += k * (0.022 * sin(t * 0.5) + 0.010 * sin(t * 0.83 + p.x * 3.0) + uJelly.x * 0.12);
+    q.y += k * 0.010 * sin(t * 0.41 + p.x * 2.0);
+    q.z += k * 0.03 * sin(t * 0.37 + p.x * 1.6);
+  } else {
+    // the bell squeezes; a slow wave runs down the arms, larger toward their ends
+    float bell = smoothstep(0.22, 0.5, p.y);
+    float down = clamp((0.42 - p.y) / 1.4, 0.0, 1.0);
+    q.x += (p.x + 0.27) * (-0.075 * uPulse) * bell;
+    q.y += bell * (p.y - 0.3) * 0.12 * uPulse + 0.025 * uPulse;
+    float w = sin(t * 0.7 - p.y * 4.2);
+    q.x += down * (0.05 * w + 0.018 * sin(t * 1.1 + p.y * 9.0 + p.x * 3.0) - uArmSway.x * 0.12 * down);
+    q.y += down * (0.012 * cos(t * 0.9 + p.x * 7.0) - uArmSway.y * 0.05 * down);
+    q.z += down * 0.06 * cos(t * 0.6 - p.y * 3.6);
+  }
+  return q;
+}
+void main(){
+  vec3 q = place(uv);
+  float e = 0.006;
+  vec3 n = normalize(cross(place(uv + vec2(e, 0.0)) - q, place(uv + vec2(0.0, e)) - q));
+  vUv2 = uv; vRad = length(uv * 2.0 - 1.0); vObjP = q;
+  vec4 w = modelMatrix * vec4(q, 1.0);
+  vWorld = w.xyz; vN = mat3(modelMatrix) * n;
+  gl_Position = projectionMatrix * viewMatrix * w;
+}`;
+const PHOTO_GRADE = /* glsl */ `
+// gentler than graded(): the photograph's own light is kept
+vec3 photoGrade(vec3 c){
+  c *= mix(vec3(1.0), uLightColor, 0.1) * (0.82 + 0.18 * uLightInt);
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c = mix(c, palette(0.1 + sqrt(max(l, 0.0)) * 0.9) * (l * 1.5 + 0.02), uArtTint * 0.45);
+  c *= 1.0 + uSession * (uBreath - 0.5) * 0.16 + 0.22 * uAura.w;
+  c += c * uBloom * 0.4;
+  if (!(c.r >= 0.0 && c.g >= 0.0 && c.b >= 0.0)) c = vec3(0.0);
+  return min(c, vec3(4.0));
 }
 `;
-export const bellVert = /* glsl */ `
-${MEDUSA}
-${PASS}
-void main(){
-  float s = uv.y * 1.25, a = uv.x * 6.2831853;
-  float e = 0.012;
-  float s0 = max(s, 0.02);
-  vec3 p = bellP(s, a, uPulse);
-  vec3 ps = bellP(s0 + e, a, uPulse) - bellP(s0 - e, a, uPulse);
-  vec3 pa = bellP(s0, a + e, uPulse) - bellP(s0, a - e, uPulse);
-  vec3 n = normalize(cross(pa, ps));
-  vUv2 = vec2(uv.x, s);
-  vec4 w = modelMatrix * vec4(p, 1.0);
-  vWorld = w.xyz; vN = mat3(modelMatrix) * n;
-  gl_Position = projectionMatrix * viewMatrix * w;
-}`;
-export const bellFrag = /* glsl */ `
+export const photoFrag = /* glsl */ `
 ${COMMON}
-uniform float uPulse;
+${PHOTO_GRADE}
+uniform sampler2D uPhoto;
+uniform sampler2D uRelief;
+uniform vec4 uCrop;     // photo uv = uCrop.xy + uv * uCrop.zw
+uniform float uScene;
+uniform float uReady;
+uniform float uOpen;
+varying float vRad;
+varying vec3 vObjP;
+float plum(vec2 uv){ vec3 c = texture2D(uPhoto, uv).rgb; return dot(c, vec3(0.3, 0.55, 0.15)); }
 void main(){
-  vec3 N = faceN(), V = normalize(cameraPosition - vWorld), L = normalize(uLightDir);
+  vec2 uv = uCrop.xy + vUv2 * uCrop.zw;
+  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
+  vec3 c = texture2D(uPhoto, uv).rgb;
+  float mask = texture2D(uRelief, vUv2).g;
+  // relight: the relief's slope plus the picture's own fine texture as a bump
+  vec3 V = normalize(cameraPosition - vWorld), L = normalize(uLightDir + vec3(0.0, 0.0, 0.35));
+  vec2 px = vec2(0.0016);
+  float l0 = plum(uv);
+  vec2 g = vec2(plum(uv + vec2(px.x, 0.0)) - l0, plum(uv + vec2(0.0, px.y)) - l0);
+  vec3 N = normalize(vN);
+  vec3 Nb = normalize(N - vec3(g * 2.2, 0.0));
+  float flat_ = clamp(dot(vec3(0.0, 0.2, 0.98), L), 0.1, 1.0);
+  float dif = clamp((dot(Nb, L) + 0.5) / 1.5, 0.0, 1.0) / ((flat_ + 0.5) / 1.5);
+  vec3 col = c * mix(1.0, clamp(dif, 0.35, 1.5), 0.6);
+  // light coming through thin, bright tissue from behind
   float ndv = clamp(dot(N, V), 0.0, 1.0);
-  float s = vUv2.y, a = vUv2.x * 6.2831853;
-  float wrap = clamp((dot(N, L) + 0.7) / 1.7, 0.0, 1.0);
-  vec3 peri = mix(vec3(0.3, 0.33, 0.95), vec3(0.2, 0.13, 0.62), smoothstep(0.2, 1.0, s));
-  vec3 col = peri * (0.22 + 0.62 * wrap);
-  // fine radial tissue
-  float rx = a * 48.0;
-  col *= 0.9 + 0.14 * mix(cos(rx), 0.0, smoothstep(0.6, 1.8, fwidth(rx)));
-  // ochre-brown marks radiating over the crown
-  float seg = a / 6.2831853 * 16.0 + 0.12 * snoise(vec2(a * 2.0, s * 5.0));
-  float dm = abs(fract(seg) - 0.5);
-  float wid = mix(0.12, 0.3, smoothstep(0.15, 0.6, s)) * (0.8 + 0.4 * hash12(vec2(mod(floor(seg), 16.0), 3.0)));
-  float mark = (1.0 - smoothstep(wid - 0.07, wid + 0.03, 0.5 - dm + 0.0)) ;
-  mark *= smoothstep(0.1, 0.2, s) * (1.0 - smoothstep(0.48, 0.78, s + 0.12 * snoise(vec2(seg * 2.0, 1.0))));
-  mark *= 0.55 + 0.45 * smoothstep(-0.2, 0.5, snoise(vec2(a * 9.0, s * 9.0)));
-  col = mix(col, vec3(0.5, 0.22, 0.05) * (0.35 + 0.8 * wrap), mark * 0.85);
-  col = mix(col, vec3(0.42, 0.18, 0.06) * (0.4 + 0.7 * wrap), (1.0 - smoothstep(0.03, 0.11, s)) * 0.8);
-  // its own light: brighter as it contracts, gathered at the thin edges
-  float f = pow(1.0 - ndv, 2.2);
-  col += vec3(0.42, 0.45, 1.0) * f * (0.5 + 0.35 * uPulse);
-  col += vec3(0.75, 0.6, 1.0) * exp(-sq((s - 1.0) / 0.045)) * 0.3;
+  col += c * sq(1.0 - ndv) * 0.5;
   vec3 H = normalize(L + V);
-  col += vec3(0.8, 0.85, 1.0) * pow(clamp(dot(N, H), 0.0, 1.0), 40.0) * 0.28;
-  float al = clamp(0.62 + 0.3 * f + mark * 0.3, 0.0, 1.0);
-  al *= gl_FrontFacing ? 1.0 : 0.85;
-  gl_FragColor = vec4(graded(col), al * uW);
-}`;
-export const armVert = /* glsl */ `
-${MEDUSA}
-uniform float uIdx;
-${PASS}
-varying float vFrill;
-vec3 armP(float u, float v){
-  float ph = uIdx * 2.399;
-  float L = 1.28 + 0.3 * fract(uIdx * 0.618);
-  float r0 = 0.1 + 0.2 * fract(uIdx * 0.37);
-  vec2 base = r0 * vec2(cos(ph), sin(ph));
-  float lift = 0.1 * uPulse * v;                          // pulled up as the bell squeezes
-  vec3 c = vec3(base.x, 0.46 - v * L + lift, base.y);
-  c.xz += drift(v, ph) + base * 0.55 * sin(v * 2.6);
-  float w = (0.06 + 0.3 * pow(max(sin(3.1416 * min(v * 0.93 + 0.05, 1.0)), 0.0), 0.7)) * (1.0 - 0.45 * v);
-  float th = ph + v * 2.2 + 0.25 * sin(uTime * 0.4 + v * 3.0 + ph);
-  vec3 sd = vec3(cos(th), 0.0, sin(th)), nd = vec3(-sin(th), 0.0, cos(th));
-  float e = pow(abs(u), 1.4);
-  float k = v * 62.0 + sign(u) * 1.3 + ph * 3.0 + 4.0 * u * u - uTime * 0.8;
-  float fr = sin(k) + 0.55 * sin(k * 2.3 + u * 4.0) + 0.3 * sin(k * 4.7 + u * 9.0);
-  vec3 p = c + sd * u * w * (1.0 + 0.07 * sin(k * 1.4)) + nd * w * 0.36 * e * fr;
-  p.y += w * 0.1 * e * cos(k * 1.3 + u * 3.0) + w * 0.5 * e;
-  return p;
-}
-void main(){
-  float u = uv.x * 2.0 - 1.0, v = uv.y;
-  vec3 p = armP(u, v);
-  vec3 du = armP(u + 0.03, v) - armP(u - 0.03, v);
-  vec3 dv = armP(u, v + 0.003) - armP(u, v - 0.003);
-  vec3 n = normalize(cross(du, dv) + 1e-6);
-  float k = v * 62.0 + sign(u) * 1.3 + uIdx * 2.399 * 3.0 + 4.0 * u * u - uTime * 0.8;
-  vFrill = sin(k) + 0.55 * sin(k * 2.3 + u * 4.0);
-  vUv2 = uv;
-  vec4 w = modelMatrix * vec4(p, 1.0);
-  vWorld = w.xyz; vN = mat3(modelMatrix) * n;
-  gl_Position = projectionMatrix * viewMatrix * w;
-}`;
-export const armFrag = /* glsl */ `
-${COMMON}
-uniform float uIdx;
-varying float vFrill;
-void main(){
-  vec3 N = faceN(), V = normalize(cameraPosition - vWorld), L = normalize(uLightDir);
-  float u = vUv2.x * 2.0 - 1.0, v = vUv2.y, au = abs(u);
-  float n = fbm(vec2(u * 5.0 + uIdx, v * 40.0));
-  // lace: the outer edge is ragged and full of small holes
-  float ragged = au + 0.2 * n;
-  if (ragged > 0.97) discard;
-  if (au > 0.55 && snoise(vec2(u * 12.0, v * 90.0 + uIdx * 7.0)) > 0.66) discard;
-  float wrap = clamp((dot(N, L) + 0.75) / 1.75, 0.0, 1.0);
-  float ndv = clamp(dot(N, V), 0.0, 1.0);
-  vec3 crest = mix(vec3(0.72, 0.6, 0.92), vec3(0.92, 0.75, 0.82), fract(uIdx * 0.41));
-  vec3 fold = vec3(0.17, 0.1, 0.42);
-  vec3 col = mix(fold, crest, clamp(0.45 + 0.28 * vFrill + 0.25 * n + 0.2 * au, 0.0, 1.0));
-  col *= 0.2 + 0.72 * wrap;
-  col += vec3(0.5, 0.45, 1.0) * pow(1.0 - ndv, 2.5) * 0.28;
-  col += vec3(0.9, 0.8, 1.0) * smoothstep(0.75, 0.95, ragged) * 0.2;
-  col *= mix(1.0, 0.55, smoothstep(0.3, 1.0, v)) * mix(0.5, 1.0, smoothstep(0.0, 0.15, v));
-  gl_FragColor = vec4(graded(col), uW);
-}`;
-export const tentVert = /* glsl */ `
-${MEDUSA}
-attribute vec2 aT; // x: index 0..1 around the margin, y: random
-${PASS}
-void main(){
-  float a = aT.x * 6.2831853, v = uv.y;
-  vec3 m = bellP(1.0, a, uPulse);
-  float L = 1.15 + 0.85 * aT.y;
-  vec3 c = m + vec3(0.0, -v * L + 0.12 * uPulse * v, 0.0);
-  vec2 d = drift(v, aT.y * 20.0) * 1.35;
-  c.xz += d - normalize(m.xz) * 0.3 * v * v + 0.02 * vec2(sin(v * 26.0 + aT.y * 30.0 - uTime), cos(v * 23.0 + aT.y * 17.0 - uTime)) * v;
-  float r = 0.0048 * (1.0 - 0.7 * v);
-  float th = uv.x * 6.2831853;
-  vec3 n = vec3(cos(th), 0.0, sin(th));
-  vUv2 = uv;
-  vec4 w = modelMatrix * vec4(c + n * r, 1.0);
-  vWorld = w.xyz; vN = mat3(modelMatrix) * n;
-  gl_Position = projectionMatrix * viewMatrix * w;
-}`;
-export const tentFrag = /* glsl */ `
-${COMMON}
-void main(){
-  vec3 N = normalize(vN), V = normalize(cameraPosition - vWorld);
-  vec3 col = vec3(0.2, 0.015, 0.04) * (0.45 + 0.55 * clamp(dot(N, normalize(uLightDir)), 0.0, 1.0));
-  col += vec3(0.8, 0.2, 0.35) * sq(1.0 - clamp(dot(N, V), 0.0, 1.0)) * 0.25;
-  gl_FragColor = vec4(graded(col), uW * 0.9 * (1.0 - smoothstep(0.75, 1.0, vUv2.y)));
+  col += (c + 0.02) * pow(clamp(dot(Nb, H), 0.0, 1.0), 26.0) * 0.3 * smoothstep(0.02, 0.2, l0);
+  // a breath of its own light: only where the photograph already glows
+  float lit = smoothstep(0.28, 0.75, l0);
+  col += c * lit * (0.07 + 0.07 * sin(uTime * 0.5 + vUv2.x * 5.0 + vUv2.y * 4.0));
+  // contained in the ball: falls quietly into the dark before the rim
+  float a = mask * (1.0 - smoothstep(0.9, 1.0, length(vObjP.xy) * 0.93)) ;
+  if (uScene < 0.5){
+    float o = uOpen * uOpen * (3.0 - 2.0 * uOpen);
+    a *= 1.0 - smoothstep(o * 1.25, o * 1.25 + 0.22, vRad);
+  }
+  gl_FragColor = vec4(photoGrade(col), clamp(a, 0.0, 1.0) * uW * uReady);
 }`;
 
-// ------------------------------------------------------------------ crystal
-export const crystalVert = /* glsl */ `
-attribute vec3 aAxis;
-attribute vec2 aSeed2; // x: random, y: 0 base .. 1 tip
-uniform float uTime;
+export const plainVert = /* glsl */ `
 ${PASS}
-varying vec2 vSeed2;
-varying vec3 vObj;
 void main(){
-  vSeed2 = aSeed2; vObj = position; vUv2 = uv;
-  vec3 p = position + aAxis * 0.012 * sin(uTime * 0.4 + aSeed2.x * 20.0);
-  vec4 w = modelMatrix * vec4(p, 1.0);
-  vWorld = w.xyz;
-  vN = mat3(modelMatrix) * normal;
+  vUv2 = uv;
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  vWorld = w.xyz; vN = mat3(modelMatrix) * normal;
   gl_Position = projectionMatrix * viewMatrix * w;
 }`;
-export const crystalFrag = /* glsl */ `
+// the dark inside of a specimen ball
+export const denFrag = /* glsl */ `
 ${COMMON}
-varying vec2 vSeed2;
-varying vec3 vObj;
-vec3 room(vec3 R){
-  vec3 c = mix(vec3(0.01, 0.03, 0.05), vec3(0.3, 0.5, 0.58), smoothstep(-0.3, 1.0, R.y));
-  c += vec3(1.0) * 1.5 * smoothstep(0.9, 0.97, dot(R, normalize(vec3(-0.5, 0.8, 0.4))));
-  c += vec3(0.4, 0.9, 1.0) * 0.8 * smoothstep(0.86, 0.95, dot(R, normalize(vec3(0.8, 0.3, 0.5))));
-  c += vec3(0.6, 1.0, 0.8) * 0.5 * smoothstep(0.88, 0.95, dot(R, normalize(vec3(-0.7, -0.4, 0.6))));
-  return c;
-}
+uniform vec3 uDen;
+void main(){
+  vec3 V = normalize(cameraPosition - vWorld);
+  float k = clamp(abs(dot(normalize(vN), V)), 0.0, 1.0);
+  vec3 c = uDen * (0.25 + 0.75 * sq(1.0 - k)) + vec3(0.0012);
+  gl_FragColor = vec4(c, uW * smoothstep(0.0, 0.14, k));
+}`;
+// its thin glass: a soft window, a faint curved rim; light only, nothing is hidden by it
+export const shellFrag = /* glsl */ `
+${COMMON}
+uniform vec3 uDen;
 void main(){
   vec3 N = normalize(vN), V = normalize(cameraPosition - vWorld);
-  bool inner = !gl_FrontFacing;
-  if (inner) N = -N;
   float ndv = clamp(dot(N, V), 0.0, 1.0);
-  float fres = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
-  float t = vSeed2.y, sd = vSeed2.x;
-  // glowing green-blue at the root, water-clear at the tip
-  vec3 hue = mix(vec3(0.02, 0.62, 0.38), vec3(0.03, 0.3, 0.95), smoothstep(0.25, 0.75, sd + 0.25 * vObj.x));
-  vec3 clear = vec3(0.8, 0.95, 1.0);
-  float root = 1.0 - smoothstep(0.1, 0.85, t);
-  // refraction: the field behind, bent by this face; split slightly by colour
+  float f = pow(1.0 - ndv, 4.0);
   vec2 suv = gl_FragCoord.xy / uResolution;
-  vec2 off = (mat3(viewMatrix) * N).xy * vec2(1.0 / uAspect, 1.0) * uOrbR * 0.55;
-  vec3 behind = vec3(fieldColor(clamp(suv - off * 0.94, 0.0, 1.0)).r, fieldColor(clamp(suv - off, 0.0, 1.0)).g, fieldColor(clamp(suv - off * 1.06, 0.0, 1.0)).b);
-  vec3 R = reflect(-V, N), T = refract(-V, N, 0.68);
-  vec3 col = behind * 1.3 * mix(hue * 2.0, clear, t) + room(T) * mix(hue * 1.2, clear, 0.25 + 0.6 * t) * 0.3;
-  float pulse = 0.85 + 0.15 * sin(uTime * 0.5 + sd * 12.0);
-  col += hue * (root * root * 1.5 + root * 0.35) * pulse;                             // light held in the base
-  col += hue * 0.1;
-  // internal veils and growth lines, only faintly
-  float veil = smoothstep(0.35, 0.8, snoise(vObj.xy * 5.0 + vObj.z * 4.0 + sd * 10.0));
-  col += clear * veil * 0.05 * (1.0 - t);
-  col += room(R) * fres * 0.9;
+  vec3 env = fieldColor(clamp(suv + (mat3(viewMatrix) * N).xy * vec2(0.25 / uAspect, 0.25), 0.0, 1.0));
+  vec3 c = (mix(vec3(0.5, 0.6, 0.7), uDen * 6.0, 0.35) * 0.11 + env * 0.6) * f;
+  c += vec3(0.75, 0.85, 1.0) * exp(-sq((ndv - 0.13) / 0.035)) * 0.018;       // a hair of light just inside the edge
+  // a tall soft window, sliding over the glass as it tilts
+  vec3 R = reflect(-V, N);
+  vec2 w = vec2(dot(R, normalize(vec3(0.8, 0.0, 0.6))), R.y) - vec2(-0.45, 0.62);
+  c += vec3(0.8, 0.9, 1.0) * (1.0 - smoothstep(0.05, 0.3, length(w * vec2(1.6, 0.9)))) * 0.04;
   vec3 H = normalize(normalize(uLightDir) + V);
-  col += vec3(1.0) * pow(clamp(dot(N, H), 0.0, 1.0), 420.0) * 1.6;
-  // crisp bright edges (uv.x = distance to the nearest edge of this face)
-  float ew = fwidth(vUv2.x);
-  float edge = 1.0 - smoothstep(0.0, ew * 1.6 + 0.012, vUv2.x);
-  col += mix(hue, clear, 0.55 + 0.45 * t) * edge * 0.4;
-  col += vec3(0.85, 1.0, 1.0) * smoothstep(0.86, 1.0, t) * 0.4;        // the lit point of the tip
-  float al = mix(0.14, 0.34, root) + fres * 0.6 + edge * 0.34 + smoothstep(0.86, 1.0, t) * 0.2;
-  if (inner) { al *= 0.5; col *= 0.7; }
-  gl_FragColor = vec4(graded(col), clamp(al, 0.0, 1.0) * uW);
+  c += vec3(1.0) * pow(clamp(dot(N, H), 0.0, 1.0), 1400.0) * 0.18;
+  if (!(c.r >= 0.0 && c.g >= 0.0 && c.b >= 0.0)) c = vec3(0.0);
+  gl_FragColor = vec4(c, uW);
 }`;
 
 // ------------------------------------------------------------------ ray-cast balls
@@ -492,7 +231,10 @@ float f3(vec3 p){ return vn(p) * 0.55 + vn(p * 2.1 + 7.3) * 0.28 + vn(p * 4.3 + 
 `;
 export const spaceFrag = /* glsl */ `
 ${RAY}
-// After the recording: a night sky of thousands of fine stars on black, turning as one
+${PHOTO_GRADE}
+uniform sampler2D uPhoto;
+uniform float uReady;
+// The galaxy photograph inside a ball of night sky. Motion after the recording: a night sky of thousands of fine stars on black, turning as one
 // body about a pole below the frame (0.02 rad/s, measured from it), with a faint dusty
 // band and a blue-grey glow low down that stays put while the stars move.
 vec3 starLayer(vec3 d, float sc, float dens, float size){
@@ -533,30 +275,49 @@ void main(){
   // deep shells turn very slightly slower, so there is depth as the sky wheels round
   vec3 d1 = spinAx(pole, t) * part_(normalize(far_));
   vec3 d2 = spinAx(pole, t * 1.08) * part_(near_);
-  vec3 d3 = spinAx(pole, t * 1.2) * part_(normalize(far_));
-  // the Milky Way: a wide band where faint stars crowd together, broken by dust
-  float bandD = dot(d1, normalize(vec3(0.35, 0.8, 0.45)));
-  float patchy = f3(d1 * 3.2 + 5.0);
-  float band = exp(-sq(bandD / 0.42)) * smoothstep(0.3, 0.62, patchy);
-  vec3 col = vec3(0.0005, 0.0008, 0.0016);
-  col += starLayer(d1, 20.0, 0.34, 0.085) * 2.6;
-  col += starLayer(d1 + 2.3, 34.0, 0.3 + 0.3 * band, 0.1) * 1.7;
-  col += starLayer(d1 + 7.1, 58.0, 0.22 + 0.5 * band, 0.12) * 1.25;
-  col += starLayer(d1 + 4.7, 96.0, 0.1 + 0.6 * band, 0.14) * 0.8;
-  col += starLayer(d2 * 0.8 + 11.0, 30.0, 0.2, 0.09) * 1.6;
-  col += starLayer(d3 * 0.7 + 17.0, 26.0, 0.1, 0.07) * 1.8;
-  // unresolved starlight and warm dust in the band
-  col += mix(vec3(0.03, 0.02, 0.013), vec3(0.028, 0.034, 0.04), f3(d1 * 5.0)) * band * 0.5;
+    // the galaxy: the photograph, floating as a disc in the middle of the ball, its heart
+  // swelling toward you; the whole sky wheels slowly, as in the recording
+  vec3 rdr = normalize(refract(rd, normalize(near_), 0.9));
+  float pz = 0.0;
+  vec2 q2 = vec2(0.0);
+  for (int k = 0; k < 3; k++){
+    float tt = (pz - near_.z) / min(rdr.z, -0.05);
+    q2 = (near_ + rdr * tt).xy;
+    pz = 0.3 * exp(-dot(q2, q2) * 5.0) - 0.12 * dot(q2, q2);
+  }
+  vec2 dq2 = q2 - uPoke.xy * 0.8;
+  q2 -= normalize(dq2 + 1e-4) * uDisperse * 0.1 * exp(-dot(dq2, dq2) * 6.0);
+  float ca = cos(t), sa = sin(t);
+  // the heart turns a little ahead of the rim
+  float wind = 0.06 * sin(uTime * 0.07) * exp(-dot(q2, q2) * 3.0);
+  ca = cos(t + wind); sa = sin(t + wind);
+  // spherized: swollen in the middle, drawn away round the sides, the arms curling with it
+  float g2 = dot(q2, q2);
+  float gc = 0.22 * g2 * (1.0 + 0.4 * sin(uTime * 0.11));
+  vec2 gq = mat2(ca, -sa, sa, ca) * mat2(cos(gc), -sin(gc), sin(gc), cos(gc)) * q2 * (0.74 + 0.28 * g2);
+  vec2 guv = vec2(0.478, 0.512) + gq * vec2(0.305, 0.489);
+  vec3 ph = texture2D(uPhoto, guv).rgb * uReady;
+  float inside = 1.0 - smoothstep(0.86, 1.0, length(q2));
+  ph = ph / (1.0 + 0.55 * ph);                       // hold detail in the bright heart
+  vec3 col = vec3(0.0005, 0.0008, 0.0016) + ph * inside * 1.05;
+  float pl = dot(ph, vec3(0.333));
+  col += ph * smoothstep(0.1, 0.5, pl) * 0.1 * sin(uTime * 0.4 + q2.x * 6.0) * inside;
+  // crisp stars behind and in front, so it has depth as it tilts
+  col += (starLayer(d1, 20.0, 0.3, 0.085) * 1.5 + starLayer(d1 + 7.1, 58.0, 0.3, 0.12) * 0.7) * (1.0 - smoothstep(0.05, 0.3, pl)) * (0.45 + 0.55 * (1.0 - inside));
+  col += starLayer(d2 * 0.8 + 11.0, 30.0, 0.16, 0.085) * 1.2 + starLayer(d2 * 0.7 + 17.0, 22.0, 0.08, 0.06) * 1.6;
   // the glow low in the sky: fixed to the world, not to the stars
   float low = (uGroupRot * near_).y;
   float haze = 1.0 - smoothstep(-0.95, 0.35, low);
-  col += vec3(0.05, 0.085, 0.11) * haze * haze * (0.75 + 0.5 * f3(d2 * 2.0 + 3.0));
+  col += vec3(0.02, 0.036, 0.05) * haze * haze * (0.75 + 0.5 * f3(d2 * 2.0 + 3.0));
+  // the ball's own roundness: it darkens toward its limb, lit a little from the key side
+  float facing = clamp(dot(normalize(uGroupRot * near_), normalize(uLightDir + vec3(0.0, 0.0, 1.6))), 0.0, 1.0);
+  col *= 0.4 + 0.72 * smoothstep(0.1, 0.9, facing);
   // a thin breath of atmosphere, so it reads as a ball
   float rim = 1.0 - sd;
   rim = clamp(rim, 0.0, 1.0);
   col += vec3(0.16, 0.26, 0.36) * rim * rim * rim * (0.22 + 0.3 * haze);
   float aa = fwidth(disc) + 1e-4;
-  gl_FragColor = vec4(graded(col * 1.5), smoothstep(0.0, aa * 2.0 + 0.01, disc) * uW);
+  gl_FragColor = vec4(photoGrade(col), smoothstep(0.0, aa * 2.0 + 0.01, disc) * uW);
 }`;
 export const iceFrag = /* glsl */ `
 ${RAY}

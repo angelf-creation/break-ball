@@ -17,3 +17,7 @@ Rain, wind and waves are synthesised (filtered noise), not recordings.
 ## Fonts
 
 Laginchy and Satoshi, self-hosted in `public/fonts/`.
+
+## Scene pictures
+
+`public/scenes/orchid.jpg`, `mushroom.jpg`, `medusa.jpg`, `space.jpg`: supplied by the project's author.

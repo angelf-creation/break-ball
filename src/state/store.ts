@@ -57,11 +57,22 @@ export function save(key: 'length' | 'mix', value: unknown) {
 /** Pace per mode. Session slows every time-based uniform; play is unclamped. */
 export const MODE_PACE: Record<AppMode, number> = { session: 0.25, play: 1 };
 
+function firstVisit(): boolean {
+  try {
+    if (window.localStorage.getItem('break-ball.seen')) return false;
+    window.localStorage.setItem('break-ball.seen', '1');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const initial: AppState = {
   material: 'default',
   pattern: 'opcell',
   artist: 'default',
-  historyOpen: false,
+  // the first visit opens on the welcome text (the Default card); after that it stays out of the way
+  historyOpen: typeof window !== 'undefined' && firstVisit(),
   session: { id: 'free', startedAt: null, durationSec: 0 },
   sound: { enabled: false, volume: 0.6 },
   time: { live: true, scrubHour: 12 },

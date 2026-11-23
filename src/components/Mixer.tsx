@@ -65,7 +65,7 @@ export function SoundPanel() {
         <Slider k="binaural" label="Binaural · 6 Hz difference" note="Needs headphones: each ear hears a slightly different tone." />
       </section>
       <button type="button" onClick={resetMix} className="tap w-full rounded-btn border border-white/30 bg-white/10 h-11 text-[13px] font-bold text-white">
-        Reset level
+        Reset Level
       </button>
     </div>
   );

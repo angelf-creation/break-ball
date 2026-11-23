@@ -7,7 +7,6 @@ import { useNow } from './hooks';
 export function StatusPill() {
   const live = useStore((s) => s.time.live);
   const scrubHour = useStore((s) => s.time.scrubHour);
-  const compact = useStore((s) => s.isCompact);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useNow(1000, live);
@@ -44,15 +43,6 @@ export function StatusPill() {
         className={`${glass} tap rounded-btn h-10 px-4 flex items-center gap-2.5 text-[12px] text-white/75 hover:text-white transition-colors`}
       >
         <span className="tabular-nums font-bold text-white/90">{formatHM(p.hour, p.minute)}</span>
-        <span className="text-white/40">{p.abbr}</span>
-        <span className="text-white/25">·</span>
-        <span>{PHASE_LABEL[mood.phase]}</span>
-        {!compact && (
-          <>
-            <span className="text-white/25">·</span>
-            <span className="text-white/40 tabular-nums">≈{mood.kelvin} K</span>
-          </>
-        )}
         {!live && <span className="ml-0.5 rounded bg-white/10 px-1.5 py-[1px] text-[9px] uppercase tracking-[0.15em] text-white/60">scrub</span>}
       </button>
 

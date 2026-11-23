@@ -1,6 +1,6 @@
 export type MaterialId =
   | 'default' | 'glass' | 'jelly' | 'dust' | 'fog' | 'water' | 'powder'
-  | 'ice' | 'crystal' | 'prism'
+  | 'ice' | 'prism'
   | 'flower' | 'mushroom' | 'root' | 'medusa' | 'pillow';
 export type PatternId = 'opcell' | 'moire' | 'cymatic' | 'ganzfeld';
 export type ArtistId = 'default' | 'turrell' | 'janssens' | 'cruzdiez' | 'eliasson' | 'pashgian' | 'corse';
@@ -16,7 +16,7 @@ export type VideoKind = 'desktop' | 'phone';
 
 export const MATERIAL_ORDER: MaterialId[] = [
   'default', 'glass', 'jelly', 'dust', 'fog', 'water', 'powder',
-  'ice', 'crystal', 'prism',
+  'ice', 'prism',
   'flower', 'mushroom', 'root', 'medusa', 'pillow',
 ];
 export const PATTERN_ORDER: PatternId[] = ['opcell', 'moire', 'cymatic', 'ganzfeld'];

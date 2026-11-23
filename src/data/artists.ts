@@ -47,7 +47,7 @@ export const ARTISTS: Artist[] = [
     form: base,
     history:
       'Break Ball started as a personal animation study that grew over time with one simple goal: making a calming pause accessible to everyone, for free. Whether you’re burned out by screens, job searching, or heavy projects—even if you don’t call it “meditation”—let the sound and kinetic motion help quiet the noise and switch off a stressed brain.',
-    inOrb: 'A glossy sphere with your animation wrapped around it: drag to turn it all the way round, with its far side glimpsed dimly through the skin.',
+    inOrb: 'A glossy sphere with your animation wrapped around it: drag to tilt it, with its far side glimpsed dimly through the skin.',
   },
   {
     id: 'turrell',
