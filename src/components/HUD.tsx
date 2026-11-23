@@ -248,10 +248,12 @@ function MobileHUD() {
   );
 }
 
+// Overlays take clicks, except while hidden (pointer-events-none): a closed panel
+// must never sit invisibly on top of the controls.
 export function HUD() {
   const compact = useStore((s) => s.isCompact);
   return (
-    <div className="pointer-events-none absolute inset-0 [&>*]:pointer-events-auto">
+    <div className="pointer-events-none absolute inset-0 [&>*:not(.pointer-events-none)]:pointer-events-auto">
       {compact ? <MobileHUD /> : <DesktopHUD />}
       {!compact && <HistoryCard />}
       <BreathIndicator />
