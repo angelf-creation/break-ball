@@ -52,7 +52,7 @@ export function StatusPill() {
         className={`${glass} rounded-full h-9 pl-3 pr-3.5 flex items-center gap-2.5 text-[12px] text-white/75 hover:text-white transition-colors`}
       >
         <span className="h-2 w-2 rounded-full" style={{ background: PHASE_DOT[mood.phase], boxShadow: `0 0 10px ${PHASE_DOT[mood.phase]}` }} />
-        <span className="tabular-nums text-white/90">{formatHM(p.hour, p.minute)}</span>
+        <span className="tabular-nums font-bold text-white/90">{formatHM(p.hour, p.minute)}</span>
         <span className="text-white/40">{p.abbr}</span>
         <span className="text-white/25">·</span>
         <span>{PHASE_LABEL[mood.phase]}</span>
@@ -66,7 +66,7 @@ export function StatusPill() {
       </button>
 
       {open && (
-        <div className={`${glass} absolute top-11 w-[min(88vw,340px)] rounded-2xl p-4 z-30`}>
+        <div className={`${glass} absolute top-11 w-[min(88vw,340px)] rounded-squircle px-6 py-5 z-30`}>
           <div className="flex items-center justify-between mb-3">
             <div className="text-[10px] uppercase tracking-[0.22em] text-white/40">Time scrub · Europe/Berlin</div>
             <button

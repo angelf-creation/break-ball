@@ -1,12 +1,24 @@
-export type MaterialId = 'default' | 'glass' | 'jelly' | 'dust' | 'fog' | 'water' | 'mercury' | 'powder';
+export type MaterialId =
+  | 'default' | 'glass' | 'jelly' | 'dust' | 'fog' | 'water' | 'mercury' | 'powder'
+  | 'ice' | 'crystal' | 'prism'
+  | 'flower' | 'mushroom' | 'mould' | 'root' | 'medusa' | 'pillow' | 'turrell';
 export type PatternId = 'opcell' | 'moire' | 'cymatic' | 'ganzfeld';
-export type ArtistId = 'default' | 'turrell' | 'janssens' | 'cruzdiez' | 'eliasson' | 'goethe' | 'kandinsky';
-export type SessionId = 'free' | 'pause60' | 'reset5' | 'med10';
-export type VideoKind = 'desktop' | 'phone';
-export type VideoPref = 'auto' | VideoKind;
-export type VideoStatus = 'loading' | 'ready' | 'fallback' | 'missing';
+export type ArtistId = 'default' | 'turrell' | 'janssens' | 'cruzdiez' | 'eliasson' | 'pashgian' | 'corse';
+export type SessionId = 'free' | 'm5' | 'm15' | 'm42' | 'm60' | 'open';
+import type { BreathPresetId } from '../time/breath';
 
-export const MATERIAL_ORDER: MaterialId[] = ['default', 'glass', 'jelly', 'dust', 'fog', 'water', 'mercury', 'powder'];
+/**
+ * Two surfaces, one engine. 'session' = meditation (everything slowed by `pace`,
+ * only sessionSafe materials); 'play' = the kinetic toy (unclamped).
+ */
+export type AppMode = 'session' | 'play';
+export type VideoKind = 'desktop' | 'phone';
+
+export const MATERIAL_ORDER: MaterialId[] = [
+  'default', 'glass', 'jelly', 'dust', 'fog', 'water', 'mercury', 'powder',
+  'ice', 'crystal', 'prism',
+  'flower', 'mushroom', 'mould', 'root', 'medusa', 'pillow', 'turrell',
+];
 export const PATTERN_ORDER: PatternId[] = ['opcell', 'moire', 'cymatic', 'ganzfeld'];
 
 export interface SessionState {
@@ -26,11 +38,39 @@ export interface AppState {
   sessionCompletedAt: number | null;
   sound: { enabled: boolean; volume: number };
   time: { live: boolean; scrubHour: number };
-  videoPref: VideoPref;
+  /** chosen from the viewport (phone on narrow/touch screens); not a user setting */
   activeVideo: VideoKind;
-  videoStatus: VideoStatus;
   reducedMotion: boolean;
   isCompact: boolean;
   /** px of screen height the bottom UI covers (cards, sheets, tab bar); the scene frames the orb above it */
   uiInsetBottom: number;
+  mode: AppMode;
+  /** global multiplier on every time-based uniform: ~0.25 in session mode, 1 in play */
+  pace: number;
+  /** persisted in localStorage; no accounts, all state is local */
+  breathPreset: BreathPresetId;
+  /** last chosen session length, persisted */
+  sessionLength: SessionId;
+  /** epoch ms of the last weekly-streak bloom; the orb blooms with light for a few seconds */
+  bloomAt: number | null;
+  /** bumped when the journal changes, so the calendar re-reads it */
+  journalRev: number;
+  calendarOpen: boolean;
+  mixerOpen: boolean;
+  /** mixer levels 0..1, persisted */
+  mix: MixLevels;
+}
+
+/** Independent sound channels, all blendable. */
+export interface MixLevels {
+  orb: number; // the material's own sound
+  rain: number;
+  wind: number;
+  waves: number;
+  forest: number; // CC0 field recording (see CREDITS.md)
+  birdsong: number; // CC0 field recording (see CREDITS.md)
+  tone40: number; // pure 40 Hz tone
+  tone136: number; // pure 136.1 Hz tone
+  binaural: number; // 6 Hz difference between ears (headphones)
+  breath: number; // breath cues
 }

@@ -1,3 +1,43 @@
+/* Fonts are self-hosted from public/fonts (no CDN).
+   Laginchy has ONE weight: hierarchy comes from size and opacity, never weight.
+   Satoshi Regular/Bold/Italic/BoldItalic share one family, so font-weight and
+   font-style switch normally. */
+@font-face {
+  font-family: 'Laginchy';
+  src: url('/fonts/Laginchy-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Satoshi';
+  src: url('/fonts/Satoshi-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Satoshi';
+  src: url('/fonts/Satoshi-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Satoshi';
+  src: url('/fonts/Satoshi-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Satoshi';
+  src: url('/fonts/Satoshi-BoldItalic.woff2') format('woff2');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -87,6 +127,27 @@ body {
       0 12px 40px -14px rgba(0, 0, 0, 0.75);
   }
 
+  /* the ONE primary action: a solid white pill, dark text */
+  .btn-primary {
+    background: #f7f6ff;
+    color: #0b0d1a;
+    font-weight: 700;
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 1),
+      0 6px 24px -8px rgba(200, 195, 255, 0.55);
+    transition: transform 0.3s, box-shadow 0.3s, background-color 0.3s;
+  }
+  .btn-primary:hover {
+    background: #ffffff;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 1),
+      0 8px 30px -8px rgba(200, 195, 255, 0.75);
+  }
+  .btn-primary:active {
+    transform: scale(0.98);
+  }
+
   /* selected button / chip: a raised glass lozenge */
   .glass-btn-active {
     background: linear-gradient(160deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.07) 55%, rgba(255, 255, 255, 0.11) 100%);
@@ -98,6 +159,7 @@ body {
       inset 0 -1px 0 rgba(255, 255, 255, 0.06),
       0 4px 16px -6px rgba(0, 0, 0, 0.6);
     color: #fff;
+    font-weight: 700;
   }
 
   /* idle button: clear until hovered, then a faint glass sheen */

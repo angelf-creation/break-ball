@@ -2,27 +2,31 @@ import { store } from '../state/store';
 import { MATERIAL_ORDER, type MaterialId } from '../state/types';
 import { breathAt, sessionElapsed } from '../time/breath';
 import { makeNoiseBuffers, type NoiseBuffers } from './noise';
+import { MATERIAL_BY_ID } from '../data/materials';
+import type { BedLayer, VoiceSpec } from './spec';
+import type { MixLevels } from '../state/types';
 
 /**
- * Procedural ASMR soundscape. Each consistency has a quiet continuous bed and
- * a stream of sparse events; layers crossfade when the material changes.
+ * Procedural ASMR soundscape. Each material has a quiet continuous bed and a
+ * stream of sparse events; layers crossfade when the material changes.
  * Nothing is created until enable() is called from a user gesture.
+ *
+ * The engine has NO per-material code: each material's SoundSpec (declared in
+ * its preset in data/materials.ts) picks bed layers and a voice from the fixed
+ * library below. A new material = a new preset row; a genuinely new kind of
+ * sound = a new voice here, like a new shader generator.
+ *
+ * Session mode damps sound the way it damps visuals: fewer ambient events,
+ * longer attacks (no sharp transients), quieter touches and a darker bus.
  */
+
+/** loudest each mixer channel gets at slider 1 (balances very different sources) */
+const CH_MAX: Record<keyof MixLevels, number> = {
+  orb: 1, rain: 0.5, wind: 0.45, waves: 0.55, forest: 0.8, birdsong: 0.6, tone40: 0.22, tone136: 0.07, binaural: 0.06, breath: 1.4,
+};
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
-
-/** average events per second, per layer */
-const EVENT_RATE: Record<MaterialId, number> = {
-  default: 0.22,
-  glass: 0.55,
-  jelly: 0.4,
-  dust: 12,
-  fog: 0.1,
-  water: 1.2,
-  mercury: 0.18,
-  powder: 0.32,
-};
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -36,6 +40,13 @@ export class AudioEngine {
   private currentMaterial: MaterialId | null = null;
   private volume = 0.6;
   private suspendTimer: number | null = null;
+  private tone!: BiquadFilterNode;
+  /** mixer: the material's own sound, and each independent channel */
+  private orbBus!: GainNode;
+  private ch = new Map<keyof MixLevels, GainNode>();
+  private mix: MixLevels | null = null;
+  /** 0 = play, 1 = full session damping; eased toward the store's pace */
+  private calm = 0;
   enabled = false;
 
   async enable() {
@@ -67,6 +78,15 @@ export class AudioEngine {
     if (this.ctx && this.enabled) this.master.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.15);
   }
 
+  /** Mixer levels (0..1 each). */
+  setMix(levels: MixLevels) {
+    this.mix = levels;
+    if (!this.ctx) return;
+    for (const k of ['forest', 'birdsong'] as const) if (levels[k] > 0) this.ensureRecording(k);
+    const t = this.ctx.currentTime;
+    this.ch.forEach((g, k) => g.gain.setTargetAtTime(CH_MAX[k] * levels[k], t, 0.3));
+  }
+
   setMaterial(id: MaterialId) {
     if (!this.ctx) return;
     this.currentMaterial = id;
@@ -78,26 +98,61 @@ export class AudioEngine {
   touch(material: MaterialId, intensity: number, pan: number) {
     if (!this.ctx || !this.enabled) return;
     const t = this.ctx.currentTime + 0.005;
-    this.event(material, t, 0.6 + 0.6 * intensity, pan, this.bus, true);
+    // session: touches are quieter and softer-edged
+    const amp = (0.6 + 0.6 * intensity) * (1 - 0.4 * this.calm);
+    this.event(material, t, amp, pan, this.orbBus, true);
   }
 
+  /**
+   * End of session: a gong, as a release rather than an alarm. A soft mallet
+   * strike, inharmonic metal partials, the gong's slow "bloom" (upper partials
+   * swell a moment after the hit), and a long ring-out. Plays at the session
+   * end even though the session calm is still in effect, so it is never sharp.
+   */
   chime() {
     if (!this.ctx || !this.enabled) return;
     const ctx = this.ctx;
-    const t = ctx.currentTime + 0.05;
-    [
-      [523.25, 0.05, 4.5],
-      [784.0, 0.025, 3.2],
-      [1046.5, 0.012, 2.2],
-    ].forEach(([f, a, d]) => {
+    const t = ctx.currentTime + 0.08;
+    const f0 = 98; // G2
+    // [ratio, level, attack, decay, bloom delay]
+    const partials: [number, number, number, number, number][] = [
+      [1, 0.09, 0.03, 12, 0],
+      [1.48, 0.05, 0.05, 9, 0.4],
+      [2.0, 0.045, 0.06, 10, 0.25],
+      [2.66, 0.035, 0.3, 7, 0.9],
+      [3.3, 0.028, 0.5, 6, 1.3],
+      [4.17, 0.02, 0.7, 5, 1.8],
+      [5.43, 0.012, 0.9, 3.5, 2.2],
+    ];
+    const out = this.gain(1);
+    out.connect(this.bus);
+    for (const [ratio, level, attack, decay, bloom] of partials) {
       const o = ctx.createOscillator();
       o.type = 'sine';
-      o.frequency.value = f;
-      const g = this.env(t, 0.02, d, a, this.bus);
+      // a slight beating pair per partial gives the metallic shimmer
+      const o2 = ctx.createOscillator();
+      o2.type = 'sine';
+      o.frequency.value = f0 * ratio;
+      o2.frequency.value = f0 * ratio * 1.0035;
+      const g = ctx.createGain();
+      const ts = t + bloom;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(level * 0.35, t + 0.02);
+      g.gain.linearRampToValueAtTime(level, ts + attack);
+      g.gain.exponentialRampToValueAtTime(0.0001, ts + attack + decay);
       o.connect(g);
+      o2.connect(g);
+      g.connect(out);
+      const end = ts + attack + decay + 0.5;
       o.start(t);
-      o.stop(t + d + 0.2);
-    });
+      o2.start(t);
+      o.stop(end);
+      o2.stop(end);
+    }
+    // the soft mallet: a short, low, filtered thump
+    this.burst(this.nb.brown, t, 0.25)
+      .connect(this.filter('lowpass', 180))
+      .connect(this.env(t, 0.015, 0.25, 0.12, out));
   }
 
   dispose() {
@@ -128,6 +183,7 @@ export class AudioEngine {
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
     lp.frequency.value = 9000;
+    this.tone = lp; // darkened in session mode
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -22;
     comp.ratio.value = 3;
@@ -138,22 +194,49 @@ export class AudioEngine {
     this.bus = ctx.createGain();
     this.bus.connect(lp).connect(comp).connect(this.master).connect(ctx.destination);
 
+    // mixer channels, each with its own level
+    const mixCh = (k: keyof MixLevels) => {
+      const g = this.gain(0);
+      g.connect(this.bus);
+      this.ch.set(k, g);
+      return g;
+    };
+    this.orbBus = mixCh('orb');
+
     for (const id of MATERIAL_ORDER) {
       const g = ctx.createGain();
       g.gain.value = 0;
-      g.connect(this.bus);
+      g.connect(this.orbBus);
       this.layers.set(id, g);
       this.buildBed(id, g);
     }
 
-    // breath layer: a soft filtered air swell that follows the 4s/6s rhythm
+    // breath cues: a soft filtered air swell that follows the breath rhythm
     this.breathGain = ctx.createGain();
     this.breathGain.gain.value = 0;
     const bsrc = this.loop(this.nb.pink);
     const bf = ctx.createBiquadFilter();
     bf.type = 'lowpass';
     bf.frequency.value = 520;
-    bsrc.connect(bf).connect(this.breathGain).connect(this.bus);
+    bsrc.connect(bf).connect(this.breathGain).connect(mixCh('breath'));
+
+    // nature: real-world filtered-noise processes, so synthesis has no loop seam
+    this.buildRain(mixCh('rain'));
+    this.buildWind(mixCh('wind'));
+    this.buildWaves(mixCh('waves'));
+    // recorded nature (synthesis can't fake birds); loaded only when first turned up
+    mixCh('forest');
+    mixCh('birdsong');
+    // pure tones (labelled neutrally in the UI: frequency only, no claims)
+    this.osc('sine', 40).connect(mixCh('tone40'));
+    this.osc('sine', 136.1).connect(mixCh('tone136'));
+    // binaural: a slightly different tone in each ear (only works on headphones)
+    const merge = ctx.createChannelMerger(2);
+    this.osc('sine', 200).connect(merge, 0, 0);
+    this.osc('sine', 206).connect(merge, 0, 1);
+    merge.connect(mixCh('binaural'));
+
+    if (this.mix) this.setMix(this.mix);
 
     this.timer = window.setInterval(() => this.tick(), 90);
   }
@@ -201,72 +284,99 @@ export class AudioEngine {
     o.connect(g).connect(param);
   }
 
+  /** Build a material's continuous bed from its spec. */
   private buildBed(id: MaterialId, out: GainNode) {
-    const nb = this.nb;
-    switch (id) {
-      case 'default': {
-        const f = this.filter('lowpass', 900);
-        const g = this.gain(0.035);
-        [110, 164.81, 220.4].forEach((hz, i) => {
-          const o = this.osc('sine', hz);
-          const og = this.gain(i === 2 ? 0.35 : 1);
-          this.lfo(og.gain, 0.05 + i * 0.03, 0.25);
-          o.connect(og).connect(f);
-        });
-        f.connect(g).connect(out);
-        break;
-      }
-      case 'glass': {
-        const s = this.loop(nb.white);
-        s.connect(this.filter('bandpass', 7200, 2.5)).connect(this.gain(0.01)).connect(out);
-        break;
-      }
-      case 'jelly': {
-        const s = this.loop(nb.brown);
-        s.connect(this.filter('lowpass', 260)).connect(this.gain(0.06)).connect(out);
-        break;
-      }
-      case 'dust': {
-        const s = this.loop(nb.white);
-        s.connect(this.filter('highpass', 5200)).connect(this.gain(0.006)).connect(out);
-        break;
-      }
-      case 'fog': {
-        const s = this.loop(nb.pink);
-        const f = this.filter('lowpass', 700, 0.4);
-        this.lfo(f.frequency, 0.045, 420);
-        s.connect(f).connect(this.gain(0.16)).connect(out);
-        const b = this.loop(nb.brown);
-        b.connect(this.filter('lowpass', 240)).connect(this.gain(0.08)).connect(out);
-        break;
-      }
-      case 'water': {
-        const s = this.loop(nb.pink);
-        const f = this.filter('bandpass', 1300, 0.8);
-        this.lfo(f.frequency, 0.13, 300);
-        s.connect(f).connect(this.gain(0.035)).connect(out);
-        break;
-      }
-      case 'mercury': {
-        const f = this.filter('bandpass', 700, 6);
-        this.lfo(f.frequency, 0.035, 350);
-        const g = this.gain(0.05);
-        [196, 294.6, 391.1].forEach((hz) => {
-          const o = this.osc('sine', hz);
-          this.lfo(o.frequency, 0.07 + Math.random() * 0.05, 1.5);
-          o.connect(f);
-        });
-        f.connect(g).connect(out);
-        break;
-      }
-      case 'powder': {
-        const s = this.loop(nb.white);
-        const g = this.gain(0.012);
-        this.lfo(g.gain, 0.09, 0.008);
-        s.connect(this.filter('bandpass', 3000, 0.8)).connect(g).connect(out);
-        break;
-      }
+    for (const layer of MATERIAL_BY_ID[id].sound.bed) this.buildLayer(layer, out);
+  }
+
+  private buildLayer(L: BedLayer, out: GainNode) {
+    const f = this.filter(L.filter.type, L.filter.freq, L.filter.q ?? 0.7);
+    const g = this.gain(L.gain);
+    if (L.lfo) this.lfo(L.lfo.target === 'freq' ? f.frequency : g.gain, L.lfo.rate, L.lfo.depth);
+    if (L.kind === 'noise') {
+      this.loop(this.nb[L.color]).connect(f);
+    } else {
+      L.freqs.forEach((hz, i) => {
+        const o = this.osc(L.wave, hz);
+        if (L.drift) this.lfo(o.frequency, 0.07 + Math.random() * 0.05, L.drift);
+        const og = this.gain(L.levels?.[i] ?? 1);
+        if (L.swell) this.lfo(og.gain, L.swell.rate + i * 0.03, L.swell.depth);
+        o.connect(og).connect(f);
+      });
     }
+    f.connect(g).connect(out);
+  }
+
+  // ---- recorded nature ----
+  private recordings = new Set<string>();
+
+  /**
+   * Fetch, decode and loop a CC0 field recording (public/audio, credited in
+   * CREDITS.md). The end is crossfaded into the start, so the loop has no seam.
+   * Fails quietly (e.g. offline before the file was cached): the channel stays silent.
+   */
+  private async ensureRecording(k: 'forest' | 'birdsong') {
+    if (this.recordings.has(k) || !this.ctx) return;
+    this.recordings.add(k);
+    const ctx = this.ctx;
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}audio/${k}.m4a`);
+      if (!res.ok) throw new Error(String(res.status));
+      const raw = await ctx.decodeAudioData(await res.arrayBuffer());
+      const fade = Math.min(Math.floor(raw.sampleRate * 2), Math.floor(raw.length / 4));
+      const len = raw.length - fade;
+      const buf = ctx.createBuffer(raw.numberOfChannels, len, raw.sampleRate);
+      for (let c = 0; c < raw.numberOfChannels; c++) {
+        const src = raw.getChannelData(c);
+        const out = buf.getChannelData(c);
+        out.set(src.subarray(0, len));
+        // equal-power: the last `fade` samples flow into the first ones
+        for (let i = 0; i < fade; i++) {
+          const x = i / fade;
+          out[i] = src[i] * Math.sin((x * Math.PI) / 2) + src[len + i] * Math.cos((x * Math.PI) / 2);
+        }
+      }
+      if (this.ctx !== ctx) return;
+      this.loop(buf).connect(this.ch.get(k)!);
+    } catch {
+      this.recordings.delete(k); // try again next time the slider moves
+    }
+  }
+
+  // ---- nature beds ----
+  private buildRain(out: GainNode) {
+    // steady wash of distant rain; close drops are scheduled as grains in tick()
+    const s = this.loop(this.nb.pink);
+    s.connect(this.filter('highpass', 500)).connect(this.filter('lowpass', 7000)).connect(this.gain(0.5)).connect(out);
+    const w = this.loop(this.nb.white);
+    const g = this.gain(0.12);
+    this.lfo(g.gain, 0.07, 0.04);
+    w.connect(this.filter('bandpass', 4200, 0.6)).connect(g).connect(out);
+    this.rainOut = out;
+  }
+  private rainOut: GainNode | null = null;
+
+  private buildWind(out: GainNode) {
+    const s = this.loop(this.nb.pink);
+    const f = this.filter('bandpass', 480, 1.4);
+    this.lfo(f.frequency, 0.045, 260); // the pitch of the wind wanders
+    const g = this.gain(0.7);
+    this.lfo(g.gain, 0.09, 0.35); // gusts
+    s.connect(f).connect(g).connect(out);
+    const b = this.loop(this.nb.brown);
+    b.connect(this.filter('lowpass', 180)).connect(this.gain(0.35)).connect(out);
+  }
+
+  private buildWaves(out: GainNode) {
+    // each wave: a swell that opens the filter as it rises and settles as it draws back (~9 s)
+    const s = this.loop(this.nb.pink);
+    const f = this.filter('lowpass', 700, 0.5);
+    this.lfo(f.frequency, 0.11, 520);
+    const g = this.gain(0.55);
+    this.lfo(g.gain, 0.11, 0.42);
+    s.connect(f).connect(g).connect(out);
+    const b = this.loop(this.nb.brown);
+    b.connect(this.filter('lowpass', 220)).connect(this.gain(0.4)).connect(out);
   }
 
   private tick() {
@@ -276,10 +386,15 @@ export class AudioEngine {
     if (s.material !== this.currentMaterial) this.setMaterial(s.material);
     const now = ctx.currentTime;
     const dt = 0.09;
+    // ease toward the session pace, like the visuals (pace 0.25 -> calm 1, pace 1 -> calm 0)
+    const calmTarget = Math.min(1, Math.max(0, (1 - s.pace) / 0.75));
+    this.calm += (calmTarget - this.calm) * (1 - Math.exp(-dt * 0.6));
+    this.tone.frequency.setTargetAtTime(9000 - 5500 * this.calm, now, 0.8);
+    const rateK = 1 - 0.65 * this.calm; // fewer ambient events in a session
     this.layers.forEach((g, id) => {
       const w = g.gain.value;
       if (w < 0.03 && id !== s.material) return;
-      const lambda = EVENT_RATE[id] * dt;
+      const lambda = MATERIAL_BY_ID[id].sound.rate * rateK * dt;
       let n = 0;
       // Poisson-ish: multiple events possible for dense layers
       let p = Math.random();
@@ -289,12 +404,27 @@ export class AudioEngine {
         p += Math.random();
       }
     });
+    // close raindrops: tiny bright grains, density follows the rain level
+    const rain = s.mix.rain;
+    if (rain > 0.01 && this.rainOut) {
+      const n = Math.round(30 * rain * dt * (0.6 + Math.random() * 0.8) + Math.random() * 0.5);
+      for (let i = 0; i < n; i++) {
+        const ti = now + Math.random() * dt;
+        const dur = rnd(0.004, 0.012);
+        this.burst(this.nb.white, ti, dur)
+          .connect(this.filter('bandpass', rnd(2500, 7000), 2))
+          .connect(this.env(ti, 0.001, dur, rnd(0.05, 0.16), this.panner(rnd(-0.8, 0.8), this.rainOut)));
+      }
+    }
     const active = s.session.id !== 'free' && s.session.startedAt != null;
-    const b = active ? breathAt(sessionElapsed(s.session.startedAt)).value : 0;
-    this.breathGain.gain.setTargetAtTime(active ? 0.03 + 0.09 * b : 0, now, 0.25);
+    const b = active ? breathAt(sessionElapsed(s.session.startedAt), s.breathPreset).value : 0;
+    // eases in quickly with the breath, and fades out slowly when the session ends
+    this.breathGain.gain.setTargetAtTime(active ? 0.03 + 0.09 * b : 0, now, active ? 0.25 : 1.5);
   }
 
   private env(t: number, a: number, d: number, peak: number, dest: AudioNode): GainNode {
+    // session: no sharp transients, every attack is stretched
+    a = Math.max(a, 0.12 * this.calm);
     const g = this.ctx!.createGain();
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(peak, t + a);
@@ -317,125 +447,153 @@ export class AudioEngine {
     return s;
   }
 
-  /** One-shot sound for a material. */
+  /** One-shot sound for a material: plays the voice its preset declares. */
   private event(id: MaterialId, t: number, amp: number, pan: number, dest: AudioNode, touch: boolean) {
+    this.voice(MATERIAL_BY_ID[id].sound.event, t, amp, pan, dest, touch);
+  }
+
+  /** The voice library. Each recipe is generic; materials supply the numbers. */
+  private voice(v: VoiceSpec, t: number, amp: number, pan: number, dest: AudioNode, touch: boolean) {
     const ctx = this.ctx!;
     const out = this.panner(pan, dest);
-    switch (id) {
-      case 'default': {
-        const f = pick([392, 523.25, 587.33, 659.25, 783.99]) * (touch ? 1 : 0.5);
+    const tw = (pair: [number, number]) => (touch ? pair[0] : pair[1]);
+    switch (v.voice) {
+      case 'pluck': {
         const o = ctx.createOscillator();
-        o.type = 'triangle';
-        o.frequency.value = f;
-        const lp = this.filter('lowpass', 1400);
-        const g = this.env(t, 0.01, touch ? 0.9 : 1.6, 0.04 * amp, out);
-        o.connect(lp).connect(g);
+        o.type = v.wave;
+        o.frequency.value = pick(v.notes) * (touch ? 1 : v.ambientOctave);
+        const d = tw(v.decay);
+        o.connect(this.filter('lowpass', v.lowpass)).connect(this.env(t, 0.01, d, v.amp * amp, out));
         o.start(t);
-        o.stop(t + 2);
+        o.stop(t + d + 0.3);
         break;
       }
-      case 'glass': {
-        const f0 = pick([1318.5, 1567.98, 1760, 2093, 2349.3, 2637]);
-        [
-          [1, 1, 2.2],
-          [2.76, 0.32, 1.1],
-          [5.4, 0.1, 0.5],
-        ].forEach(([ratio, a, d]) => {
+      case 'bell': {
+        const f0 = pick(v.notes);
+        for (const [ratio, a, d] of v.partials) {
           const o = ctx.createOscillator();
           o.type = 'sine';
           o.frequency.value = f0 * ratio;
-          o.connect(this.env(t, 0.003, d, 0.028 * amp * a, out));
+          o.connect(this.env(t, 0.003, d, v.amp * amp * a, out));
           o.start(t);
-          o.stop(t + d + 0.1);
-        });
+          o.stop(t + d + 0.3);
+        }
         break;
       }
-      case 'jelly': {
-        const f = pick([110, 130.81, 146.83, 164.81, 196]);
+      case 'blob': {
+        const f = pick(v.notes);
         const o = ctx.createOscillator();
         o.type = 'sine';
-        o.frequency.setValueAtTime(f * 1.7, t);
+        o.frequency.setValueAtTime(f * v.drop, t);
         o.frequency.exponentialRampToValueAtTime(f, t + 0.09);
-        const lp = this.filter('lowpass', 700);
-        o.connect(lp).connect(this.env(t, 0.006, 0.5, 0.11 * amp, out));
+        o.connect(this.filter('lowpass', v.lowpass)).connect(this.env(t, 0.006, v.decay, v.amp * amp, out));
         o.start(t);
-        o.stop(t + 0.7);
-        const n = this.burst(this.nb.brown, t, 0.08);
-        n.connect(this.filter('lowpass', 220)).connect(this.env(t, 0.004, 0.07, 0.06 * amp, out));
+        o.stop(t + v.decay + 0.3);
+        if (v.thud > 0) {
+          const n = this.burst(this.nb.brown, t, 0.08);
+          n.connect(this.filter('lowpass', 220)).connect(this.env(t, 0.004, 0.07, v.thud * amp, out));
+        }
         break;
       }
-      case 'dust': {
-        const count = touch ? 14 : 1;
-        for (let i = 0; i < count; i++) {
-          const ti = t + (touch ? Math.random() * 0.35 : 0);
-          const dur = rnd(0.008, 0.025);
+      case 'grains': {
+        const count = Math.round(tw(v.count) * (1 - 0.5 * this.calm));
+        for (let i = 0; i < Math.max(1, count); i++) {
+          const ti = t + (touch ? Math.random() * v.spread : 0);
+          const dur = rnd(v.dur[0], v.dur[1]);
           const n = this.burst(this.nb.white, ti, dur);
-          n.connect(this.filter('bandpass', rnd(5500, 9500), 1.6)).connect(this.env(ti, 0.002, dur, 0.02 * amp, out));
+          n.connect(this.filter('bandpass', rnd(v.band[0], v.band[1]), v.q)).connect(this.env(ti, 0.002, dur, v.amp * amp, out));
         }
         break;
       }
-      case 'fog': {
-        const dur = touch ? 1.4 : 2.6;
-        const n = this.burst(this.nb.pink, t, dur + 0.2);
-        const f = this.filter('lowpass', 300, 0.5);
-        f.frequency.setValueAtTime(260, t);
-        f.frequency.exponentialRampToValueAtTime(1300, t + dur * 0.45);
-        f.frequency.exponentialRampToValueAtTime(280, t + dur);
-        n.connect(f).connect(this.env(t, dur * 0.4, dur * 0.6, 0.12 * amp, out));
+      case 'swell': {
+        const dur = tw(v.dur);
+        const n = this.burst(this.nb[v.color], t, dur + 0.2);
+        const f = this.filter('lowpass', v.sweep[0], 0.5);
+        f.frequency.setValueAtTime(v.sweep[0], t);
+        f.frequency.exponentialRampToValueAtTime(v.sweep[1], t + dur * 0.45);
+        f.frequency.exponentialRampToValueAtTime(v.sweep[2], t + dur);
+        n.connect(f).connect(this.env(t, dur * 0.4, dur * 0.6, v.amp * amp, out));
         break;
       }
-      case 'water': {
-        const f0 = rnd(520, 1000);
-        const o = ctx.createOscillator();
-        o.type = 'sine';
-        o.frequency.setValueAtTime(f0, t);
-        o.frequency.exponentialRampToValueAtTime(f0 * 2.3, t + 0.055);
-        o.connect(this.env(t, 0.002, 0.11, 0.07 * amp, out));
-        o.start(t);
-        o.stop(t + 0.2);
-        if (touch) {
-          const t2 = t + 0.12;
-          const o2 = ctx.createOscillator();
-          o2.type = 'sine';
-          o2.frequency.setValueAtTime(f0 * 0.8, t2);
-          o2.frequency.exponentialRampToValueAtTime(f0 * 1.7, t2 + 0.05);
-          o2.connect(this.env(t2, 0.002, 0.1, 0.035 * amp, out));
-          o2.start(t2);
-          o2.stop(t2 + 0.2);
-        }
+      case 'drop': {
+        const chirp = (at: number, f0: number, level: number) => {
+          const o = ctx.createOscillator();
+          o.type = 'sine';
+          o.frequency.setValueAtTime(f0, at);
+          o.frequency.exponentialRampToValueAtTime(f0 * v.chirp, at + 0.055);
+          o.connect(this.env(at, 0.002, v.decay, level, out));
+          o.start(at);
+          o.stop(at + v.decay + 0.3);
+        };
+        const f0 = rnd(v.range[0], v.range[1]);
+        chirp(t, f0, v.amp * amp);
+        if (touch && v.echo > 0) chirp(t + 0.12, f0 * 0.8, v.amp * amp * v.echo);
         break;
       }
-      case 'mercury': {
-        const f0 = pick([196, 220, 261.63, 293.66]);
-        const dur = touch ? 0.9 : 1.6;
-        const bp = this.filter('bandpass', 900, 3);
-        bp.frequency.setValueAtTime(500, t);
-        bp.frequency.exponentialRampToValueAtTime(1400, t + dur);
-        const g = this.env(t, dur * 0.3, dur * 0.8, 0.07 * amp, out);
-        bp.connect(g);
+      case 'whirl': {
+        const f0 = pick(v.notes);
+        const dur = tw(v.dur);
+        const bp = this.filter('bandpass', v.band[0], 3);
+        bp.frequency.setValueAtTime(v.band[0], t);
+        bp.frequency.exponentialRampToValueAtTime(v.band[1], t + dur);
+        bp.connect(this.env(t, dur * 0.3, dur * 0.8, v.amp * amp, out));
         [1, 2.01].forEach((ratio, i) => {
           const o = ctx.createOscillator();
           o.type = i ? 'triangle' : 'sine';
           o.frequency.setValueAtTime(f0 * ratio, t);
-          o.frequency.exponentialRampToValueAtTime(f0 * ratio * 1.5, t + dur);
+          o.frequency.exponentialRampToValueAtTime(f0 * ratio * v.rise, t + dur);
           const vib = ctx.createOscillator();
-          vib.frequency.value = 4.5;
-          const vg = this.gain(3 * ratio);
-          vib.connect(vg).connect(o.frequency);
+          vib.frequency.value = v.vibrato;
+          vib.connect(this.gain(3 * ratio)).connect(o.frequency);
           o.connect(bp);
           o.start(t);
           vib.start(t);
-          o.stop(t + dur * 1.2);
-          vib.stop(t + dur * 1.2);
+          o.stop(t + dur * 1.2 + 0.3);
+          vib.stop(t + dur * 1.2 + 0.3);
         });
         break;
       }
-      case 'powder': {
-        const dur = touch ? 0.55 : 0.9;
+      case 'crackle': {
+        // fracture: a few tiny bright clicks, then a soft low settling
+        const n = Math.max(1, Math.round(tw(v.ticks) * (1 - 0.5 * this.calm)));
+        for (let i = 0; i < n; i++) {
+          const ti = t + (touch ? Math.random() * v.spread : 0) + i * 0.012;
+          const dur = rnd(0.002, 0.006);
+          this.burst(this.nb.white, ti, dur)
+            .connect(this.filter('bandpass', rnd(v.band[0], v.band[1]), 3))
+            .connect(this.env(ti, 0.001, dur, v.amp * amp * rnd(0.5, 1), out));
+        }
+        if (v.settle > 0) {
+          const ts = t + (touch ? v.spread : 0.05);
+          this.burst(this.nb.brown, ts, 0.4)
+            .connect(this.filter('lowpass', 300))
+            .connect(this.env(ts, 0.06, 0.35, v.settle * amp, out));
+        }
+        break;
+      }
+      case 'shimmer': {
+        // a rising run of sine steps, each a little higher, staggered: light splitting into colour
+        let f = pick(v.base);
+        const steps = touch ? v.steps : Math.max(2, Math.round(v.steps / 2));
+        for (let i = 0; i < steps; i++) {
+          const ti = t + i * tw(v.stagger);
+          const o = ctx.createOscillator();
+          o.type = 'sine';
+          o.frequency.value = f;
+          const p = this.panner(Math.max(-1, Math.min(1, pan + (i / steps - 0.5) * 0.8)), dest);
+          o.connect(this.env(ti, 0.004, v.decay, (v.amp * amp) / (1 + i * 0.15), p));
+          o.start(ti);
+          o.stop(ti + v.decay + 0.3);
+          f *= v.interval;
+        }
+        break;
+      }
+      case 'hiss': {
+        const dur = tw(v.dur);
         const n = this.burst(this.nb.white, t, dur);
-        n.connect(this.filter('bandpass', rnd(2000, 3200), 0.7))
+        n.connect(this.filter('bandpass', rnd(v.band[0], v.band[1]), 0.7))
           .connect(this.filter('lowpass', 5000))
-          .connect(this.env(t, dur * 0.3, dur * 0.7, 0.035 * amp, out));
+          .connect(this.env(t, dur * 0.3, dur * 0.7, v.amp * amp, out));
         break;
       }
     }

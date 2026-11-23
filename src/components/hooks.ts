@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
-import { store } from '../state/store';
-import { SESSIONS } from '../data/sessions';
-import type { SessionId } from '../state/types';
+import { MODE_PACE, saveBreath, store } from '../state/store';
+import { MATERIAL_BY_ID } from '../data/materials';
+import type { BreathPresetId } from '../time/breath';
+import { OPEN_MIN_SEC, SESSION_BY_ID } from '../data/sessions';
+import { addEntry, earnsBloom, readJournal } from '../state/journal';
+import type { AppMode, SessionId } from '../state/types';
 import type { AudioEngine } from '../audio/AudioEngine';
 
 /** Keeps reduced-motion, compact layout and the auto video choice in sync with the viewport. */
@@ -10,9 +13,9 @@ export function useEnvironmentSync() {
     const rm = window.matchMedia('(prefers-reduced-motion: reduce)');
     const cq = window.matchMedia(store.compactQuery);
     const apply = () => {
-      const s = store.get();
       const isCompact = cq.matches;
-      const activeVideo = s.videoPref === 'auto' ? (isCompact ? 'phone' : 'desktop') : s.videoPref;
+      // phone video on narrow / touch viewports, desktop otherwise (fallbacks live in VideoSource)
+      const activeVideo = isCompact ? 'phone' : 'desktop';
       store.set({ reducedMotion: rm.matches, isCompact, activeVideo });
     };
     apply();
@@ -20,7 +23,7 @@ export function useEnvironmentSync() {
     cq.addEventListener('change', apply);
     const unsub = store.subscribe(() => {
       const s = store.get();
-      const want = s.videoPref === 'auto' ? (s.isCompact ? 'phone' : 'desktop') : s.videoPref;
+      const want = s.isCompact ? 'phone' : 'desktop';
       if (want !== s.activeVideo) store.set({ activeVideo: want });
     });
     return () => {
@@ -31,12 +34,82 @@ export function useEnvironmentSync() {
   }, []);
 }
 
-export function startSession(id: SessionId) {
-  const info = SESSIONS.find((x) => x.id === id)!;
+/**
+ * Switch surface. One engine: the mode only sets the pace multiplier and, in
+ * session mode, swaps out any material that is not sessionSafe.
+ */
+export function setMode(mode: AppMode) {
+  const s = store.get();
   store.set({
-    session: id === 'free' ? { id, startedAt: null, durationSec: 0 } : { id, startedAt: Date.now(), durationSec: info.durationSec },
-    historyOpen: false,
+    mode,
+    pace: MODE_PACE[mode],
+    material: mode === 'session' && !MATERIAL_BY_ID[s.material].sessionSafe ? 'default' : s.material,
   });
+}
+
+/** Start a session of the given length (or 'free' to end one). */
+export function startSession(id: SessionId) {
+  if (id === 'free') {
+    endSession();
+    return;
+  }
+  const info = SESSION_BY_ID[id];
+  saveLen(id);
+  store.set({
+    session: { id, startedAt: Date.now(), durationSec: info.durationSec },
+    sessionLength: id,
+    historyOpen: false,
+    calendarOpen: false,
+    mixerOpen: false,
+  });
+  setMode('session');
+}
+
+function saveLen(id: SessionId) {
+  try {
+    window.localStorage.setItem('break-ball.length', JSON.stringify(id));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * End the current session. Everything eases out from here (scene pace, breath
+ * scale, audio calm all damp back over a few seconds), nothing cuts.
+ * An open session that ran at least a minute counts as completed.
+ */
+export function endSession() {
+  const { session } = store.get();
+  if (session.id === 'open' && session.startedAt != null) {
+    const ran = (Date.now() - session.startedAt) / 1000;
+    if (ran >= OPEN_MIN_SEC) {
+      completeSession(Math.round(ran));
+      return;
+    }
+  }
+  store.set({ session: { id: 'free', startedAt: null, durationSec: 0 } });
+  setMode('play');
+}
+
+/** Log a completed session; the first of a week that continues a weekly run blooms the orb. */
+function completeSession(durationSec: number) {
+  const s = store.get();
+  const now = new Date();
+  const before = readJournal();
+  const bloom = earnsBloom(before, now);
+  addEntry({ at: now.toISOString(), durationSec, breath: s.breathPreset, material: s.material });
+  store.set({
+    session: { id: 'free', startedAt: null, durationSec: 0 },
+    sessionCompletedAt: Date.now(),
+    journalRev: s.journalRev + 1,
+    bloomAt: bloom ? Date.now() : s.bloomAt,
+  });
+  setMode('play');
+}
+
+export function setBreathPreset(id: BreathPresetId) {
+  saveBreath(id);
+  store.set({ breathPreset: id });
 }
 
 /** Ends timed sessions on completion and plays a soft chime. */
@@ -44,9 +117,9 @@ export function useSessionClock(audio?: AudioEngine) {
   useEffect(() => {
     const t = window.setInterval(() => {
       const { session } = store.get();
-      if (session.id === 'free' || session.startedAt == null) return;
+      if (session.id === 'free' || session.startedAt == null || session.durationSec <= 0) return; // open timer: no end
       if ((Date.now() - session.startedAt) / 1000 >= session.durationSec) {
-        store.set({ session: { id: 'free', startedAt: null, durationSec: 0 }, sessionCompletedAt: Date.now() });
+        completeSession(session.durationSec);
         audio?.chime();
       }
     }, 250);
@@ -70,6 +143,7 @@ export function useAudioSync(audio: AudioEngine) {
   useEffect(() => {
     let prev = store.get();
     audio.setVolume(prev.sound.volume);
+    audio.setMix(prev.mix);
     const unsub = store.subscribe(() => {
       const s = store.get();
       if (s.sound.enabled !== prev.sound.enabled) {
@@ -78,6 +152,7 @@ export function useAudioSync(audio: AudioEngine) {
       }
       if (s.sound.volume !== prev.sound.volume) audio.setVolume(s.sound.volume);
       if (s.material !== prev.material) audio.setMaterial(s.material);
+      if (s.mix !== prev.mix) audio.setMix(s.mix);
       prev = s;
     });
     return () => {

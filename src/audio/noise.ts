@@ -7,16 +7,15 @@ export interface NoiseBuffers {
 /** Looping mono noise beds, generated once per AudioContext. */
 export function makeNoiseBuffers(ctx: AudioContext, seconds = 3): NoiseBuffers {
   const len = Math.floor(ctx.sampleRate * seconds);
-  const mk = () => ctx.createBuffer(1, len, ctx.sampleRate);
-  const white = mk();
-  const pink = mk();
-  const brown = mk();
-  const w = white.getChannelData(0);
-  const p = pink.getChannelData(0);
-  const b = brown.getChannelData(0);
+  const fade = Math.floor(ctx.sampleRate * 0.05);
+  // generate a little extra so the tail can be crossfaded into the head
+  const total = len + fade;
+  const w = new Float32Array(total);
+  const p = new Float32Array(total);
+  const b = new Float32Array(total);
   let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
   let last = 0;
-  for (let i = 0; i < len; i++) {
+  for (let i = 0; i < total; i++) {
     const x = Math.random() * 2 - 1;
     w[i] = x;
     // Paul Kellet's refined pink filter
@@ -31,14 +30,18 @@ export function makeNoiseBuffers(ctx: AudioContext, seconds = 3): NoiseBuffers {
     last = (last + 0.02 * x) / 1.02;
     b[i] = last * 3.5;
   }
-  // soften the loop seam
-  const fade = Math.floor(ctx.sampleRate * 0.02);
-  for (const arr of [w, p, b]) {
+  // No loop seam: the samples just past the end continue the signal, so blending
+  // them into the first samples (equal-power) makes the end flow into the start
+  // with no dip or click. (Fading both ends to silence would leave an audible gap.)
+  const mk = (src: Float32Array) => {
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const out = buf.getChannelData(0);
+    out.set(src.subarray(0, len));
     for (let i = 0; i < fade; i++) {
       const k = i / fade;
-      arr[i] *= k;
-      arr[len - 1 - i] *= k;
+      out[i] = src[i] * Math.sin((k * Math.PI) / 2) + src[len + i] * Math.cos((k * Math.PI) / 2);
     }
-  }
-  return { white, pink, brown };
+    return buf;
+  };
+  return { white: mk(w), pink: mk(p), brown: mk(b) };
 }

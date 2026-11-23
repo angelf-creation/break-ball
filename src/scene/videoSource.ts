@@ -1,5 +1,8 @@
 import * as THREE from 'three';
-import type { VideoKind, VideoStatus } from '../state/types';
+import type { VideoKind } from '../state/types';
+
+/** internal only: drives the fade-in and the procedural fallback, never shown */
+export type VideoStatus = 'loading' | 'ready' | 'fallback' | 'missing';
 
 const BASE = import.meta.env.BASE_URL;
 export const VIDEO_SRC: Record<VideoKind, string> = {

@@ -4,13 +4,14 @@ import type { ArtistId } from '../state/types';
 export interface ArtistForm {
   rings: number; // stepped latitude ridges (Cruz-Diez)
   ringFreq: number; // ridges per hemisphere
-  warp: number; // surface bulges into moving arcs (Kandinsky)
-  polarity: number; // warm/cool split with boundary fringes (Goethe)
   haze: number; // mist/diffusion (Janssens)
+  prism: number; // coloured light volume: gradient, projected beam, ribbed glass, dichroic streaks (Janssens)
   disc: number; // luminous sun disc (Eliasson)
   mono: number; // mono-frequency yellow (Eliasson)
   stripes: number; // induction bands (Cruz-Diez)
-  arcs: number; // circles + arcs overlay (Kandinsky)
+  resin: number; // solid cast-resin body: full absorption, polish, one suspended inclusion (Pashgian)
+  retro: number; // retroreflective microsphere skin lit only where the pointer aims (Corse)
+  studio: number; // soft studio backdrop with a coloured cast shadow (Pashgian product-shot lighting)
   aperFlat: number; // flat circular window cut into the front, luminous field inside (Turrell)
   soften: number; // edge dissolves into the background (Janssens)
   still: number; // 0 = normal motion, 1 = near-still; negative = livelier
@@ -32,8 +33,8 @@ export interface Artist {
 }
 
 const base: ArtistForm = {
-  rings: 0, ringFreq: 5, warp: 0, polarity: 0, haze: 0, disc: 0,
-  mono: 0, stripes: 0, arcs: 0, aperFlat: 0, soften: 0, still: 0, glow: 0.12,
+  rings: 0, ringFreq: 5, haze: 0, prism: 0, disc: 0, mono: 0, stripes: 0,
+  resin: 0, retro: 0, studio: 0, aperFlat: 0, soften: 0, still: 0, glow: 0.12,
 };
 
 export const ARTISTS: Artist[] = [
@@ -54,7 +55,7 @@ export const ARTISTS: Artist[] = [
     label: 'James Turrell',
     dates: 'b. 1943',
     palette: ['#1b1f6b', '#3d5bff', '#b46bff', '#ff7ab8'],
-    form: { ...base, aperFlat: 1, still: 0.75, glow: 0.24, haze: 0.08 },
+    form: { ...base, aperFlat: 1, still: 0.93, glow: 0.24, haze: 0.08 }, // very slow: relaxing
     history:
       'Turrell studied perceptual psychology at Pomona College (BA 1965), including the Ganzfeld effect, before taking light itself as his material. His Skyspaces frame the sky through a roof aperture so it seems to sit flat on the ceiling; his Ganzfeld rooms remove visible edges so depth becomes uncertain.',
     inOrb: 'A still, glowing orb with a flat circular window cut into its face, holding a near-still luminous field behind a crisp edge.',
@@ -64,22 +65,22 @@ export const ARTISTS: Artist[] = [
     name: 'Ann Veronica Janssens',
     label: 'A. V. Janssens',
     dates: 'b. 1956 · Brussels',
-    palette: ['#ffd85a', '#6aa8ff', '#ff8ac8', '#f4eee6'],
-    form: { ...base, haze: 0.85, soften: 1, still: 0.35, glow: 0.3 },
+    palette: ['#1e9bff', '#ffd23a', '#ff7a2e', '#ff3fa8'],
+    form: { ...base, haze: 0.22, prism: 1, soften: 0.45, still: 0.35, glow: 0.34 },
     history:
       'Janssens began filling enclosed rooms with coloured artificial haze in the late 1990s. In yellowbluepink (Wellcome Collection, London, 2015–16) visitors walked through mist dense enough that the room’s edges disappeared; the show opened a year-long programme on consciousness.',
-    inOrb: 'Coloured haze fills the ball; contrast softens and its edge dissolves into the surrounding dark.',
+    inOrb: 'The ball becomes a volume of coloured light: a slow gradient from blue through yellow and orange to pink, a projected beam with crisp straight edges, fine ribbed-glass lines and thin dichroic glints. Its edge dissolves into the field.',
   },
   {
     id: 'cruzdiez',
     name: 'Carlos Cruz-Diez',
     label: 'Carlos Cruz-Diez',
     dates: '1923–2019',
-    palette: ['#ff2d3d', '#21c45a', '#2f5bff', '#ffd23a'],
-    form: { ...base, rings: 1, ringFreq: 6, stripes: 0.8, glow: 0.14 },
+    palette: ['#ff2a55', '#22ff5e', '#3b2bff', '#ff8a1e'],
+    form: { ...base, stripes: 1, still: 0.2, glow: 0.3 },
     history:
       'The Franco-Venezuelan kinetic artist treated colour as an “event” unfolding in space and time rather than a fixed property of pigment. His Physichromie series (from 1959) uses thin bands that shift colour as you move, and Chromosaturation (conceived 1965) immerses visitors in rooms of red, green and blue light.',
-    inOrb: 'Chromatic latitude bands wrap the ball, raised into stepped rings with fine induction lines between them.',
+    inOrb: 'The ball becomes a Chromosaturation room: walls of neon red, green and blue light meeting in soft gradients, fine Physichromie lines that shift colour as you move, and a small cube floating in the light.',
   },
   {
     id: 'eliasson',
@@ -93,26 +94,28 @@ export const ARTISTS: Artist[] = [
     inOrb: 'The ball becomes a glowing sun in sodium-yellow monochrome, cut by a dark horizon line.',
   },
   {
-    id: 'goethe',
-    name: 'Johann Wolfgang von Goethe',
-    label: 'J. W. von Goethe',
-    dates: '1749–1832',
-    palette: ['#2b4dff', '#3fbf7a', '#ffd84a', '#ff5a2e'],
-    form: { ...base, polarity: 1, still: 0.2, glow: 0.15 },
+    id: 'pashgian',
+    name: 'Helen Pashgian',
+    label: 'Helen Pashgian',
+    dates: 'b. 1934',
+    // colour after her green-to-red sphere, top to bottom
+    palette: ['#18c35c', '#f2891e', '#d6281c', '#4b1c6e'],
+    // Turrell's neighbour (both Pomona): his is a flat aperture, hers a solid luminous body
+    form: { ...base, resin: 1, studio: 1, still: 0.9, glow: 0.2 },
     history:
-      'In Zur Farbenlehre (1810) Goethe argued, against Newton, that colour arises where light meets darkness: through a prism a light–dark edge shows blue-violet on one side and red-yellow on the other. Physics sided with Newton, but his notes on afterimages and coloured shadows are valued as early studies of how the eye itself makes colour.',
-    inOrb: 'Warm and cool hemispheres meet at a soft light–dark boundary edged with prismatic fringes.',
+      "Pashgian casts her spheres in polyester resin — a declassified military material she took up after abandoning canvas. In her lenses the colour radiates out from the centre and goes to nothing at the ultra-thin edge, and many of her spheres hold a single element suspended inside the resin. She was the only woman in California's Light and Space movement, and her 2021 show was her first in New York since 1971 — a fifty-year gap.",
+    inOrb: 'Polished resin sphere, near-still. Colour at maximum density in the centre, fading to nothing at the rim.',
   },
   {
-    id: 'kandinsky',
-    name: 'Wassily Kandinsky',
-    label: 'Wassily Kandinsky',
-    dates: '1866–1944',
-    palette: ['#ffd400', '#e52a2a', '#1f3cff', '#2a1f3d'],
-    form: { ...base, warp: 1, arcs: 1, still: -0.2, glow: 0.16 },
+    id: 'corse',
+    name: 'Mary Corse',
+    label: 'Mary Corse',
+    dates: 'b. 1945',
+    palette: ['#f4f6ff', '#1a1a1f', '#ff3b30', '#2f5bff'],
+    form: { ...base, retro: 1, still: 0.5, glow: 0.1 },
     history:
-      'Concerning the Spiritual in Art (1911, dated 1912) ties colours to sounds and emotions, likening a sharp yellow to a trumpet. He began Impression III (Concert) right after hearing Schoenberg in January 1911. Whether he was clinically synaesthetic is still debated; his pairings were partly theory.',
-    inOrb: 'The surface bulges into moving arcs while circles in the primaries drift across it.',
+      "Driving through Malibu at dusk with the sun behind her, Corse noticed the white lane lines on the road seemed to emit light rather than reflect it — they were packed with glass microspheres for night visibility. In 1968 she began mixing the same highway beads into her paint, so the surface only lights up from where you happen to be standing. She says the work is 'not on the wall, it's in your perception.'",
+    inOrb: 'A retroreflective skin of microspheres. The lit band follows your pointer, so moving is the only way to see the whole surface.',
   },
 ];
 

@@ -3,16 +3,19 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { store } from '../state/store';
 import { MATERIAL_ORDER, PATTERN_ORDER, type VideoKind } from '../state/types';
 import { ARTIST_BY_ID, type ArtistForm } from '../data/artists';
-import { MATERIAL_PHYSICS } from '../data/materials';
+import { MATERIAL_BY_ID, GEN_KEYS, NONE, type GeneratorMix } from '../data/materials';
 import { effectiveDate, lightMood } from '../time/ceTime';
 import { breathAt, sessionElapsed } from '../time/breath';
 import { VideoSource, VIDEO_DISC } from './videoSource';
+import { makeGrowthTexture, makeRootTexture } from './growth';
+import { FractureField } from './fracture';
 import { orbVertex, orbFragment } from './shaders/orb';
 import {
-  particleVertex, particleFragment, fogVertex, fogFragment, backdropVertex, backdropFragment,
+  particleVertex, particleFragment, fogVertex, fogFragment, backdropVertex, backdropFragment, ditherShader,
 } from './shaders/atmosphere';
 
 const damp = (cur: number, target: number, rate: number, dt: number) =>
@@ -21,11 +24,23 @@ const damp = (cur: number, target: number, rate: number, dt: number) =>
 const FORM_KEYS = Object.keys(ARTIST_BY_ID.default.form) as (keyof ArtistForm)[];
 const BASE_R = 1.4;
 const FOV = 30;
-const APER_COS = 0.8;
-const BACK_BLUE_DEEP = new THREE.Color('#1f3dff');
-const BACK_BLUE_SOFT = new THREE.Color('#7f8cff'); // keep in sync with APER_COS in shaders/chunks.ts
+const APER_COS = 0.8; // keep in sync with APER_COS in shaders/chunks.ts
 const ELEV = (12 * Math.PI) / 180;
-const FOG_LAYERS = [-0.72, -0.48, -0.24, 0, 0.24, 0.48, 0.72]; // slice depth (z) as a fraction of the radius
+// slice depth (z) as a fraction of the radius; the outer slices only carry haze that spilled out
+const FOG_LAYERS = [-1.2, -0.75, -0.38, 0, 0.38, 0.75, 1.2];
+const FOG_EXTENT = 1.85; // haze reaches this far (radius units) before it is gone
+/** how much the orb shrinks on an empty breath (session mode) */
+const BREATH_SCALE = 0.13;
+/** Turrell's palette for the light-field material */
+const TURRELL_COLS = ['#8a5f86', '#f3b38a', '#bfe5d4', '#d79aa0'].map((h) => new THREE.Color(h));
+const CAP_AXIS = new THREE.Vector3(0, 0.8, -0.6).normalize(); // keep in sync with chunks.ts
+const BELL_AXIS = new THREE.Vector3(0, 0.96, 0.28).normalize(); // keep in sync with chunks.ts
+/** rough-cut gem planes [nx, ny, nz, distance]; keep in sync with gemPlane() in chunks.ts */
+const GEM_PLANES: [number, number, number, number][] = [
+  [0, 1, 0, 0.78], [0, -1, 0, 0.86], [0.9, 0.3, 0.2, 0.93], [-0.85, 0.35, 0.3, 0.9], [0.2, 0.35, 0.95, 0.93],
+  [-0.3, 0.3, -0.9, 0.91], [0.7, -0.5, 0.5, 0.9], [-0.6, -0.55, 0.55, 0.92], [0.5, -0.45, -0.75, 0.9],
+  [-0.65, -0.4, -0.6, 0.93], [0.55, 0.75, -0.35, 0.9], [-0.4, 0.8, 0.45, 0.91], [0.95, -0.1, -0.3, 0.92], [-0.95, -0.05, -0.2, 0.95],
+];
 
 export interface SceneOptions {
   /** called on click / drag with intensity 0..1 and stereo pan -1..1 */
@@ -71,8 +86,12 @@ export class OrbScene {
   private raycaster = new THREE.Raycaster();
   private disposables: { dispose(): void }[] = [];
   private fogMeshes: THREE.Mesh[] = [];
-  private dust: THREE.Points;
-  private powder: THREE.Points;
+  /** [inside pass, outside pass] */
+  private dust: THREE.Points[];
+  private nebula: THREE.Points[];
+  private droplets: THREE.Points[];
+  private specks: THREE.Points[];
+  private dither: ShaderPass;
   private backdrop: THREE.Mesh;
 
   // interpolated state
@@ -86,9 +105,17 @@ export class OrbScene {
   private moodTarget = { color: new THREE.Color(1, 1, 1), intensity: 1, ambient: new THREE.Color(), elevation: 20 };
   private sessionW = 0;
   private breath = 0.5;
+  private pace = 1;
+  /** paced clock for ripples / wobble: slows with the session pace, so there are no sharp onsets */
+  private simClock = 0;
+  private fieldTime = 0;
+  private gen: GeneratorMix = { ...NONE };
+  private orbCss = { x: -1, y: -1, r: -1 };
   private motion = 1;
   private videoOn = 0;
   private tilt = { x: 0, y: 0, tx: 0, ty: 0 };
+  /** last pointer position (-1..1, y up), smoothed; Corse's lit band follows it. Never decays, so it stays where you left it. */
+  private pointer = { x: 0, y: 0.2, tx: 0, ty: 0.2 };
   private jelly = { x: 0, y: 0, vx: 0, vy: 0 };
   private disperse = 0;
   private ripples = Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, -100)); // xyz = dir * strength, w = start
@@ -102,7 +129,14 @@ export class OrbScene {
     uFront: { value: new THREE.Vector3(0, 0, 1) },
     uRings: { value: 0 },
     uRingFreq: { value: 5 },
-    uWarp: { value: 0 },
+    uCap: { value: 0 },
+    uPetalShape: { value: 0 },
+    uRootShape: { value: 0 },
+    uMouldShape: { value: 0 },
+    uSquash: { value: 0 },
+    uBell: { value: 0 },
+    uPulse: { value: 0 },
+    uEmit: { value: 0 },
     uBreath: { value: 0.5 },
     uSession: { value: 0 },
     uRipples: { value: [] as THREE.Vector4[] },
@@ -116,19 +150,65 @@ export class OrbScene {
     uVideoMix: { value: 1 },
     uVidCenter: { value: new THREE.Vector2(0.5, 0.5) },
     uVidRadius: { value: new THREE.Vector2(0.47, 0.47) },
-    uMatA: { value: new THREE.Vector4(1, 0, 0, 0) },
-    uMatB: { value: new THREE.Vector4(0, 0, 0, 0) },
+    // generator mix (see data/materials.ts)
+    uOrigin: { value: 1 },
+    uRefract: { value: 0 },
+    uAbsorb: { value: 0 },
+    uClarity: { value: 0 },
+    uReflect: { value: 0 },
+    uCaustic: { value: 0 },
+    uFilm: { value: 0 },
+    uSoft: { value: 0 },
+    uSpectral: { value: 0 },
+    uFacet: { value: 0 },
+    uDrop: { value: 0 },
+    uGem: { value: 0 },
+    uNebula: { value: 0 },
+    uCrack: { value: 0 },
+    uCrackTex: { value: null as THREE.Texture | null },
+    uMycel: { value: 0 },
+    uMycelTex: { value: null as THREE.Texture | null },
+    uFabric: { value: 0 },
+    uField: { value: 0 },
+    uLightCol: { value: new THREE.Color('#8a5f86') },
+    uOpen: { value: 0 },
+    uGroupRot: { value: new THREE.Matrix3() },
+    uPetal: { value: 0 },
+    uGill: { value: 0 },
+    uRoot: { value: 0 },
+    uRootTex: { value: null as THREE.Texture | null },
+    uSss: { value: 0 },
+    uMatte: { value: 0 },
+    uScale: { value: 1 },
+    uResolution: { value: new THREE.Vector2(1, 1) },
+    // luminous field (shaders/chunks.ts FIELD), shared by the backdrop and the orb's refraction
+    uFieldA: { value: new THREE.Color() },
+    uFieldB: { value: new THREE.Color() },
+    uFieldC: { value: new THREE.Color() },
+    uFieldD: { value: new THREE.Color() },
+    uFieldDeep: { value: new THREE.Color() },
+    uFieldTime: { value: 0 },
+    uFieldLevel: { value: 0.3 },
+    uAspect: { value: 1 },
+    uCenter: { value: new THREE.Vector2(0.5, 0.5) },
+    uOrbR: { value: 0.3 },
+    uBleed: { value: new THREE.Color() },
+    uBleedAmt: { value: 0.3 },
+    uStudio: { value: 0 },
     uPat: { value: new THREE.Vector4(1, 0, 0, 0) },
     uPal0: { value: new THREE.Color() },
     uPal1: { value: new THREE.Color() },
     uPal2: { value: new THREE.Color() },
     uPal3: { value: new THREE.Color() },
-    uPolarity: { value: 0 },
     uHaze: { value: 0 },
+    uPrism: { value: 0 },
     uDisc: { value: 0 },
     uMono: { value: 0 },
     uStripes: { value: 0 },
-    uArcs: { value: 0 },
+    uResin: { value: 0 },
+    uRetro: { value: 0 },
+    uPointer: { value: new THREE.Vector2() },
+    uBloom: { value: 0 },
     uAperFlat: { value: 0 },
     uSoften: { value: 0 },
     uReduced: { value: 0 },
@@ -144,14 +224,57 @@ export class OrbScene {
     uPoke: { value: new THREE.Vector3(0, 9, 0) },
   };
   private backU = {
-    uVoid: { value: new THREE.Color('#04060e') },
-    uGlowColor: { value: new THREE.Color() },
+    ...this.U,
     uFieldColor: { value: new THREE.Color() },
-    uGlow: { value: 0.12 },
-    uGanz: { value: 0 },
-    uAspect: { value: 1 },
-    uCenter: { value: new THREE.Vector2(0.5, 0.5) },
+    uSpectralAmt: { value: 0 },
+    uArms: { value: 0 },
+    uArmSway: { value: new THREE.Vector2() },
   };
+  private armSway = 0;
+  private lastPointerX = 0;
+  private pulseClock = 0;
+  private crackWasOn = false;
+  private spring = 38;
+  /** the orb's two shader materials; their defines switch generators on and off at compile time */
+  private orbMats: THREE.ShaderMaterial[] = [];
+  private defineKey = '';
+
+  /**
+   * Compile only what is in use. Every generator block in orb.ts sits inside
+   * #ifdef G_<NAME>; a block with zero weight would still cost GPU registers and
+   * time if it were compiled in. Here the defines follow the generators that
+   * currently have weight (both materials during a crossfade). three.js caches
+   * each compiled combination, so a material is only compiled once per visit.
+   */
+  private syncDefines() {
+    const g = this.gen;
+    const f = this.form;
+    const on = (v: number) => v > 0.0005;
+    const flags: Record<string, boolean> = {
+      G_REFRACT: on(g.refract), G_ABSORB: on(g.absorb), G_SOFT: on(g.soft), G_CAUSTIC: on(g.caustic),
+      G_EMIT: on(g.emit), G_PETAL: on(g.petal), G_GILL: on(g.gill), G_ROOT: on(g.root), G_MYCEL: on(g.mycel),
+      G_SSS: on(g.sss), G_REFLECT: on(g.reflect), G_CRACK: on(g.crack), G_GEM: on(g.gem), G_FACET: on(g.facet),
+      G_APERFLAT: on(f.aperFlat), G_HAZE: on(f.haze), G_PRISM: on(f.prism), G_RETRO: on(f.retro),
+      G_STRIPES: on(f.stripes), G_DISC: on(f.disc) || on(f.mono), G_RESIN: on(f.resin),
+    };
+    const key = Object.keys(flags).filter((k) => flags[k]).join(',');
+    if (key === this.defineKey) return;
+    this.defineKey = key;
+    this.orbMats.forEach((m, i) => {
+      const d: Record<string, number> = i === 0 ? { ORB_BACK: 1 } : {};
+      for (const k of Object.keys(flags)) if (flags[k]) d[k] = 1;
+      m.defines = d;
+      m.needsUpdate = true;
+    });
+  }
+  /** DLA frost texture, generated the first time a frost material is chosen */
+  /** ice: the live fracture network, created the first time ice is chosen */
+  private fracture: FractureField | null = null;
+  /** mould: DLA mycelium filaments */
+  private mycelTex: THREE.Texture | null = null;
+  /** orchid: how far the bloom has opened (restarts from a bud when chosen) */
+  private openT = 0;
+  private rootTex: THREE.Texture | null = null;
 
   constructor(container: HTMLElement, opts: SceneOptions = {}) {
     this.container = container;
@@ -172,8 +295,9 @@ export class OrbScene {
     this.camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 100);
 
     // video
-    this.video = new VideoSource((status, playing) => {
-      store.set({ videoStatus: status });
+    // Resilience, not a preference: phone falls back to desktop, and if neither
+    // file loads the procedural Op-Cell shows (uVideoOn stays 0).
+    this.video = new VideoSource((_status, playing) => {
       const disc = VIDEO_DISC[playing ?? 'desktop'];
       this.U.uVidCenter.value.set(disc.center[0], disc.center[1]);
       this.U.uVidRadius.value.set(disc.radius[0], disc.radius[1]);
@@ -202,44 +326,56 @@ export class OrbScene {
     );
     const front = new THREE.Mesh(
       sphere,
-      new THREE.ShaderMaterial({ vertexShader: orbVertex, fragmentShader: orbFragment, uniforms: this.U, transparent: true }),
+      new THREE.ShaderMaterial({
+        vertexShader: orbVertex, fragmentShader: orbFragment, uniforms: this.U, transparent: true,
+      }),
     );
     back.frustumCulled = front.frustumCulled = false;
     back.renderOrder = 0;
     front.renderOrder = 20; // after the far wall, particles and fog inside
     this.group.add(back, front);
+    this.orbMats = [back.material as THREE.ShaderMaterial, front.material as THREE.ShaderMaterial];
 
-    // particles
+    // Particles and fog are drawn twice: the part inside the ball before the skin
+    // (so the glass sits over it) and the part that drifted out after it. Each pass
+    // fades over a thin band at the surface, so nothing is clipped by the glass.
     const mkPoints = (n: number, kind: number, blending: THREE.Blending) => {
-      const m = new THREE.ShaderMaterial({
-        vertexShader: particleVertex, fragmentShader: particleFragment,
-        uniforms: { ...this.U, uKind: { value: kind }, uAmt: { value: 0 } },
-        transparent: true, depthWrite: false, blending,
+      const geo = particleGeometry(n);
+      return [0, 1].map((pass) => {
+        const m = new THREE.ShaderMaterial({
+          vertexShader: particleVertex, fragmentShader: particleFragment,
+          uniforms: { ...this.U, uKind: { value: kind }, uAmt: { value: 0 }, uPass: { value: pass } },
+          transparent: true, depthWrite: false, blending,
+        });
+        const pts = new THREE.Points(geo, m);
+        pts.frustumCulled = false;
+        pts.renderOrder = pass ? 30 : 3; // inside: after the far wall, before the skin (20)
+        pts.visible = false;
+        this.group.add(pts);
+        return pts;
       });
-      const pts = new THREE.Points(particleGeometry(n), m);
-      pts.frustumCulled = false;
-      pts.renderOrder = 3; // inside the ball: after the far wall, before the skin
-      pts.visible = false;
-      this.group.add(pts);
-      return pts;
     };
     this.dust = mkPoints(compact ? 1400 : 2800, 0, THREE.AdditiveBlending);
-    this.powder = mkPoints(compact ? 1600 : 3200, 1, THREE.NormalBlending);
+    this.nebula = mkPoints(compact ? 2600 : 6000, 1, THREE.AdditiveBlending);
+    this.droplets = mkPoints(compact ? 14 : 20, 3, THREE.NormalBlending);
+    this.specks = mkPoints(compact ? 500 : 900, 2, THREE.AdditiveBlending);
 
-    // fog layers
+    // fog slices, inside and spilled
     const fogGeo = new THREE.CircleGeometry(1, 72);
-    FOG_LAYERS.forEach((_, i) => {
-      const m = new THREE.ShaderMaterial({
-        vertexShader: fogVertex, fragmentShader: fogFragment,
-        uniforms: { ...this.U, uLayer: { value: i } },
-        transparent: true, depthWrite: false, side: THREE.DoubleSide,
-      });
-      const mesh = new THREE.Mesh(fogGeo, m);
-      mesh.renderOrder = 4 + i;
-      mesh.visible = false;
-      this.fogMeshes.push(mesh);
-      this.group.add(mesh);
-    });
+    [0, 1].forEach((pass) =>
+      FOG_LAYERS.forEach((_, i) => {
+        const m = new THREE.ShaderMaterial({
+          vertexShader: fogVertex, fragmentShader: fogFragment,
+          uniforms: { ...this.U, uLayer: { value: i }, uPass: { value: pass }, uSliceZ: { value: 0 }, uSliceScale: { value: 1 } },
+          transparent: true, depthWrite: false, side: THREE.DoubleSide,
+        });
+        const mesh = new THREE.Mesh(fogGeo, m);
+        mesh.renderOrder = (pass ? 21 : 4) + i;
+        mesh.visible = false;
+        this.fogMeshes.push(mesh);
+        this.group.add(mesh);
+      }),
+    );
     this.scene.add(this.group);
 
     // post
@@ -249,11 +385,15 @@ export class OrbScene {
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.4, 0.55, 0.72);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
+    this.dither = new ShaderPass(ditherShader);
+    this.composer.addPass(this.dither);
 
     this.disposables.push(
       sphere, fogGeo, back.material, front.material,
-      this.backdrop.geometry, backMat, this.dust.geometry, this.dust.material as THREE.Material,
-      this.powder.geometry, this.powder.material as THREE.Material, rt,
+      this.backdrop.geometry, backMat, this.dust[0].geometry, this.nebula[0].geometry, this.droplets[0].geometry, rt,
+      this.specks[0].geometry,
+      ...[...this.dust, ...this.nebula, ...this.droplets, ...this.specks].map((p) => p.material as THREE.Material),
+      this.dither.material,
       ...this.fogMeshes.map((m) => m.material as THREE.Material),
     );
 
@@ -273,6 +413,8 @@ export class OrbScene {
     window.addEventListener('pointermove', this.onHover, { passive: true });
 
     this.raf = requestAnimationFrame(this.tick);
+    // dev only: inspect live uniforms from the console (window.__orb.U)
+    if (import.meta.env.DEV) (window as unknown as { __orb: OrbScene }).__orb = this;
   }
 
   // ---------- layout ----------
@@ -288,6 +430,7 @@ export class OrbScene {
     this.composer.setPixelRatio(pr);
     this.composer.setSize(w, h);
     this.U.uPixelRatio.value = pr;
+    this.U.uResolution.value.set(Math.round(w * pr), Math.round(h * pr));
 
     const aspect = w / h;
     this.camera.aspect = aspect;
@@ -302,7 +445,7 @@ export class OrbScene {
     this.viewH = h;
     this.applyViewOffset();
 
-    this.backU.uAspect.value = aspect;
+    this.U.uAspect.value = aspect;
   }
 
   private baseDist = 8;
@@ -325,8 +468,31 @@ export class OrbScene {
   private applyViewOffset() {
     this.camera.setViewOffset(this.viewW, this.viewH, 0, this.viewH * this.viewShift, this.viewW, this.viewH);
     this.camera.updateProjectionMatrix();
-    const c = new THREE.Vector3(0, 0, 0).project(this.camera);
-    this.backU.uCenter.value.set(c.x * 0.5 + 0.5, c.y * 0.5 + 0.5);
+    this.updateOrbScreen();
+  }
+
+  private tmpV = new THREE.Vector3();
+  /** Orb centre + radius on screen: feeds the field's light bleed and the breath label (CSS vars). */
+  private updateOrbScreen() {
+    const c = this.tmpV.set(0, 0, 0).project(this.camera);
+    const cx = c.x * 0.5 + 0.5;
+    const cy = c.y * 0.5 + 0.5;
+    this.U.uCenter.value.set(cx, cy);
+    this.camera.updateMatrixWorld();
+    const right = this.tmpV.setFromMatrixColumn(this.camera.matrixWorld, 0).multiplyScalar(BASE_R * this.group.scale.x);
+    const e = right.project(this.camera);
+    const rr = Math.abs(e.x * 0.5 + 0.5 - cx) * this.camera.aspect; // in screen-height units
+    this.U.uOrbR.value = rr;
+    const x = Math.round(cx * this.viewW);
+    const y = Math.round((1 - cy) * this.viewH);
+    const r = Math.round(rr * this.viewH);
+    if (x !== this.orbCss.x || y !== this.orbCss.y || r !== this.orbCss.r) {
+      this.orbCss = { x, y, r };
+      const st = document.documentElement.style; // read by the breath label in the HUD
+      st.setProperty('--orb-x', `${x}px`);
+      st.setProperty('--orb-y', `${y}px`);
+      st.setProperty('--orb-r', `${r}px`);
+    }
   }
 
   // ---------- interaction ----------
@@ -335,9 +501,71 @@ export class OrbScene {
    * orbDisp in shaders/chunks.ts (breath, Turrell window); ignores small ripples/ridges.
    */
   private radiusJS(dir: THREE.Vector3): number {
-    let h = this.sessionW * (this.breath - 0.5) * 0.05;
+    let h = 0; // (the breath scales the group, which hitTest's inverse matrix already undoes)
+    const cap = this.U.uCap.value;
+    if (cap > 0.002) {
+      // mirrors capShape() in shaders/chunks.ts
+      const cc = dir.dot(CAP_AXIS);
+      const sm = (a: number, b: number, x: number) => {
+        const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
+        return k * k * (3 - 2 * k);
+      };
+      const th = Math.acos(Math.min(1, Math.max(-1, -cc)));
+      if (th < 0.455) h += cap * (Math.min(0.22 / Math.max(Math.sin(th), 1e-3), 1.25 / Math.max(Math.cos(th), 1e-3)) - 1);
+      else h += cap * (0.17 * Math.max(cc, 0) ** 2 + 0.05 * Math.exp(-(((cc + 0.14) / 0.1) ** 2)) - 0.55 * sm(-0.18, -0.95, cc));
+    }
+    // the larger organic shape terms (mirrors organicShape in chunks.ts; small noise lumps are skipped)
+    const U = this.U;
+    const side = 1 - Math.abs(dir.z);
+    const ang = Math.atan2(dir.y, dir.x);
+    const smo = (a: number, b: number, x: number) => {
+      const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
+      return k * k * (3 - 2 * k);
+    };
+    if (U.uPetalShape.value > 0.002) {
+      // mirrors orchidOutline() in chunks.ts
+      const lobe = (at: number, w: number, len: number) => {
+        const d = Math.abs(((((ang - at + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI);
+        return len * Math.exp(-(d * d) / (w * w));
+      };
+      const best = Math.max(lobe(1.5708, 0.3, 1), lobe(3.75, 0.3, 0.92), lobe(5.68, 0.3, 0.92), lobe(0.35, 0.55, 0.88), lobe(2.79, 0.55, 0.88), lobe(4.71, 0.62, 0.8));
+      h += U.uPetalShape.value * U.uOpen.value * (0.16 * (0.3 + 0.66 * best - 0.62) * smo(0.05, 0.75, side) - 0.07 * smo(0.86, 1, dir.z));
+    }
+    if (U.uRootShape.value > 0.002) h += U.uRootShape.value * 0.035 * Math.abs(Math.cos(ang * 4)) ** 8 * smo(0.98, 0.3, dir.z);
+    if (U.uMouldShape.value > 0.002) h += U.uMouldShape.value * 0.03 * smo(0.2, 0.75, dir.z);
+    if (U.uSquash.value > 0.002) h += U.uSquash.value * (0.05 - 0.13 * Math.abs(dir.y) ** 3);
+    if (U.uDrop.value > 0.002) {
+      // mirrors dropShape() (without its small moving bulges)
+      h += U.uDrop.value * (-0.24 * Math.max(-dir.y, 0) ** 2 + 0.09 * (1 - dir.y * dir.y) - 0.07 * Math.max(dir.y, 0) ** 2);
+    }
+    if (U.uGem.value > 0.002) {
+      // mirrors gemRadius(): the rough-cut polyhedron
+      let r1 = 1.4;
+      for (const [nx, ny, nz, d] of GEM_PLANES) {
+        const c = (dir.x * nx + dir.y * ny + dir.z * nz) / Math.hypot(nx, ny, nz);
+        if (c > 0.05) r1 = Math.min(r1, d / c);
+      }
+      h += U.uGem.value * (Math.min(r1, 1.35) - 1);
+    }
+    if (U.uFabric.value > 0.002) h -= U.uFabric.value * 0.045 * Math.exp(-((Math.acos(Math.max(-1, Math.min(1, dir.z))) / 0.2) ** 2));
+    if (U.uBell.value > 0.002) {
+      // mirrors bellShape() in chunks.ts
+      const c = dir.dot(BELL_AXIS);
+      const pl = U.uPulse.value;
+      h += U.uBell.value * (
+        -0.08 * Math.max(c, 0) ** 2 +
+        0.07 * Math.exp(-(((c + 0.22) / 0.1) ** 2)) * (1 - 0.7 * pl) -
+        0.5 * (1 - smo(-0.95, -0.3, c)) +
+        pl * (0.035 * Math.max(c, 0) - 0.05 * Math.exp(-(((c + 0.1) / 0.3) ** 2)))
+      );
+    }
     const c = dir.dot(this.U.uFront.value);
-    if (c > APER_COS) h += this.form.aperFlat * (APER_COS / c - 1);
+    if (this.form.aperFlat > 0.002) {
+      // mirrors smin() in shaders/chunks.ts
+      const a = 0, b = APER_COS / Math.max(c, 0.3) - 1, k = 0.035;
+      const hh = Math.min(1, Math.max(0, 0.5 + (0.5 * (b - a)) / k));
+      h += this.form.aperFlat * (b + (a - b) * hh - k * hh * (1 - hh));
+    }
     return BASE_R * (1 + h);
   }
 
@@ -393,8 +621,15 @@ export class OrbScene {
   }
 
   private poke(dir: THREE.Vector3, strength: number) {
+    // Turrell's light: touching it does nothing visible (or audible); the light simply continues
+    if (this.gen.field > 0.5) return;
+    // ice: the touch point becomes a fracture origin, new cracks branch out from it
+    if (this.gen.crack > 0.5 && this.fracture) {
+      const uv = this.discUV(dir);
+      if (uv) this.fracture.addAt(uv.x, uv.y);
+    }
     const rp = this.ripples[this.rippleIdx];
-    rp.set(dir.x * strength, dir.y * strength, dir.z * strength, this.clock);
+    rp.set(dir.x * strength, dir.y * strength, dir.z * strength, this.simClock);
     this.rippleIdx = (this.rippleIdx + 1) % this.ripples.length;
     this.jelly.vx -= dir.x * 2.4 * strength;
     this.jelly.vy -= dir.y * 2.4 * strength;
@@ -402,6 +637,22 @@ export class OrbScene {
     this.U.uPoke.value.copy(dir);
     this.opts.onTouch?.(strength, Math.max(-1, Math.min(1, dir.x)) * 0.8);
     this.video.resumeOnGesture();
+  }
+
+  /** Object-space direction -> the front-projection disc in 0..1 texture space (as orb.ts maps it). */
+  private discUV(dir: THREE.Vector3): THREE.Vector2 | null {
+    const vd = dir.clone().applyQuaternion(this.group.quaternion).transformDirection(this.camera.matrixWorldInverse);
+    const Rw = BASE_R * this.group.scale.x;
+    const k = Rw / Math.max(this.camera.position.length(), Rw * 1.5);
+    const s = 1 / Math.sqrt(1 - k * k);
+    let px = vd.x * s;
+    let py = vd.y * s;
+    const l = Math.hypot(px, py);
+    if (l > 1) {
+      px /= l;
+      py /= l;
+    }
+    return new THREE.Vector2(px * 0.5 + 0.5, py * 0.5 + 0.5);
   }
 
   private onDown = (e: PointerEvent) => {
@@ -439,6 +690,8 @@ export class OrbScene {
   };
 
   private onHover = (e: PointerEvent) => {
+    this.pointer.tx = (e.clientX / window.innerWidth) * 2 - 1;
+    this.pointer.ty = -((e.clientY / window.innerHeight) * 2 - 1);
     if (e.pointerType === 'mouse') this.setTiltFrom(e.clientX, e.clientY);
   };
 
@@ -481,7 +734,7 @@ export class OrbScene {
 
   private tick = (now: number) => {
     this.raf = requestAnimationFrame(this.tick);
-    const dt = this.last ? Math.min(0.05, (now - this.last) / 1000) : 0.016;
+    const dt = this.last ? Math.min(0.05, Math.max(0, (now - this.last) / 1000)) : 0.016;
     this.last = now;
     const s = store.get();
     const reduced = s.reducedMotion;
@@ -497,14 +750,19 @@ export class OrbScene {
     // session + breath
     const active = s.session.id !== 'free' && s.session.startedAt != null;
     this.sessionW = damp(this.sessionW, active ? 1 : 0, 0.8, dt);
-    const breathTarget = active ? breathAt(sessionElapsed(s.session.startedAt)).value : 0.5;
+    const breathTarget = active ? breathAt(sessionElapsed(s.session.startedAt), s.breathPreset).value : 1;
     this.breath = damp(this.breath, breathTarget, active ? 12 : 1, dt);
 
-    // motion pace
-    const motionTarget = Math.max(0.08, 1 - this.form.still * 0.85) * (reduced ? 0.3 : 1) * (1 - 0.5 * this.sessionW);
+    // Global pace (one engine, two modes): every time-based uniform runs on paced
+    // clocks. Damped, so switching modes never jumps.
+    this.pace = damp(this.pace, s.pace, 0.7, dt);
+    const motionTarget = Math.max(0.08, 1 - this.form.still * 0.85) * (reduced ? 0.3 : 1);
     this.motion = damp(this.motion, motionTarget, 1.5, dt);
-    this.patternTime += dt * this.motion;
+    this.patternTime += dt * this.motion * this.pace;
+    this.fieldTime += dt * (reduced ? 0.3 : 1) * this.pace;
     this.clock += dt;
+    const simDt = dt * this.pace;
+    this.simClock += simDt;
 
     // light mood (recomputed twice a second; scrubbing feels immediate through damping)
     this.moodTimer += dt;
@@ -529,21 +787,29 @@ export class OrbScene {
     this.videoOn = damp(this.videoOn, this.video.isLive() && !this.videoSwitching ? 1 : 0, 3, dt);
     this.video.setRate((reduced ? 0.6 : 1) * (1 - 0.3 * this.sessionW));
 
-    // surface physics blended by material weight
-    let rk = 0, rs = 0, rd = 0, ra = 0, jl = 0, fl = 0;
+    // Material presets -> generator uniforms + surface physics, blended by material weight.
+    // (No per-material shader code: see data/materials.ts.)
+    let rk = 0, rs = 0, rd = 0, ra = 0, jl = 0, fl = 0, sp = 0;
+    for (const key of GEN_KEYS) this.gen[key] = 0;
     MATERIAL_ORDER.forEach((id, i) => {
       const w = this.mat[i];
-      const ph = MATERIAL_PHYSICS[id];
+      if (w < 1e-4) return;
+      const m = MATERIAL_BY_ID[id];
+      for (const key of GEN_KEYS) this.gen[key] += w * m.gen[key];
+      const ph = m.physics;
       rk += w * ph.rippleK; rs += w * ph.rippleSpeed; rd += w * ph.rippleDecay;
       ra += w * ph.rippleAmp; jl += w * ph.jelly; fl += w * ph.fluid;
+      sp += w * (ph.spring ?? 38);
     });
     const j = this.jelly;
-    const kS = 38, cS = 3.2;
-    j.vx += (-kS * j.x - cS * j.vx) * dt;
-    j.vy += (-kS * j.y - cS * j.vy) * dt;
-    j.x += j.vx * dt;
-    j.y += j.vy * dt;
-    this.disperse *= Math.exp(-dt * 0.9);
+    // spring stiffness per material: pillow's slow cushioned bounce, mercury's quick settle
+    this.spring = sp > 0 ? sp : 38;
+    const kS = this.spring, cS = 3.2 * Math.sqrt(kS / 38);
+    j.vx += (-kS * j.x - cS * j.vx) * simDt;
+    j.vy += (-kS * j.y - cS * j.vy) * simDt;
+    j.x += j.vx * simDt;
+    j.y += j.vy * simDt;
+    this.disperse *= Math.exp(-simDt * 0.9);
 
     // framing
     // Fit the orb into the free band between the top bar and whatever covers the
@@ -553,7 +819,7 @@ export class OrbScene {
       const active = s.session.id !== 'free';
       const topPad = s.isCompact ? 68 : 80;
       let bottomPad = s.uiInsetBottom + (s.isCompact ? 16 : 24);
-      if (active) bottomPad += s.isCompact ? 112 : 0; // breath ring sits above the phone's bottom stack
+      if (active) bottomPad += s.isCompact ? 40 : 0; // the session timer row sits above the phone's bottom stack
       if (!s.isCompact) bottomPad = Math.max(bottomPad, active ? 150 : topPad); // keep it centred on desktop
       const avail = Math.max(140, h - topPad - bottomPad);
       const centerY = topPad + avail / 2;
@@ -585,21 +851,38 @@ export class OrbScene {
     this.group.rotation.x = this.tilt.x + Math.sin(this.clock * 0.21) * sway;
     this.group.rotation.z = -this.tilt.y + Math.cos(this.clock * 0.17) * sway;
     this.group.rotation.y = this.patternTime * 0.01;
+    // the orb scales with the breath (cosine-eased in breath.ts): full on inhale/hold, smaller at rest
+    this.group.scale.setScalar(1 - this.sessionW * (1 - this.breath) * BREATH_SCALE);
 
     // ---- write uniforms ----
     const U = this.U;
     const f = this.form;
     U.uTime.value = this.patternTime;
-    U.uClock.value = this.clock;
+    U.uClock.value = this.simClock;
     U.uRings.value = f.rings;
     U.uRingFreq.value = f.ringFreq;
-    U.uWarp.value = f.warp;
-    U.uPolarity.value = f.polarity;
     U.uHaze.value = f.haze;
+    U.uPrism.value = f.prism;
     U.uDisc.value = f.disc;
     U.uMono.value = f.mono;
     U.uStripes.value = f.stripes;
-    U.uArcs.value = f.arcs;
+    U.uResin.value = f.resin;
+    U.uRetro.value = f.retro;
+    U.uStudio.value = f.studio;
+    // weekly-streak bloom: light swells in the orb over ~2.5 s, holds, and settles over ~7 s
+    let bloomW = 0;
+    if (s.bloomAt != null) {
+      const bt = (Date.now() - s.bloomAt) / 1000;
+      if (bt >= 0 && bt < 12) {
+        const rise = Math.min(1, bt / 2.5);
+        const fall = bt < 4 ? 1 : Math.max(0, 1 - (bt - 4) / 7);
+        bloomW = rise * rise * (3 - 2 * rise) * fall * fall;
+      }
+    }
+    U.uBloom.value = bloomW;
+    this.pointer.x = damp(this.pointer.x, this.pointer.tx, 6, dt);
+    this.pointer.y = damp(this.pointer.y, this.pointer.ty, 6, dt);
+    U.uPointer.value.set(this.pointer.x, this.pointer.y);
     U.uAperFlat.value = f.aperFlat;
     U.uSoften.value = f.soften;
     // camera direction in the ball's own frame, so the Turrell window always faces the viewer
@@ -608,14 +891,78 @@ export class OrbScene {
     U.uBreath.value = this.breath;
     U.uSession.value = this.sessionW;
     U.uRippleParams.value.set(rk, rs, rd);
-    U.uRippleAmp.value = ra * (reduced ? 0.5 : 1);
+    // session pace damps ripple height as well as speed
+    const paceN = Math.min(1, Math.max(0, (this.pace - 0.25) / 0.75));
+    U.uRippleAmp.value = ra * (reduced ? 0.5 : 1) * (0.35 + 0.65 * paceN);
+    U.uScale.value = this.group.scale.x;
+    const g = this.gen;
+    U.uOrigin.value = g.origin;
+    U.uRefract.value = g.refract;
+    U.uAbsorb.value = g.absorb;
+    U.uClarity.value = g.clarity;
+    U.uReflect.value = g.reflect;
+    U.uCaustic.value = g.caustic;
+    U.uFilm.value = g.film;
+    U.uSoft.value = g.soft;
+    U.uSpectral.value = g.spectral;
+    U.uFacet.value = g.facet;
+    this.syncDefines();
+    U.uDrop.value = g.drop;
+    U.uGem.value = g.gem;
+    U.uNebula.value = g.nebula;
+    U.uCrack.value = g.crack;
+    U.uMycel.value = g.mycel;
+    U.uFabric.value = g.fabric;
+    U.uField.value = g.field;
+    // ice: grow the fractures (created on first use; started over when ice is chosen again)
+    if (g.crack > 0.001) {
+      if (!this.fracture) {
+        this.fracture = new FractureField();
+        this.disposables.push(this.fracture);
+      }
+      this.fracture.step(dt, this.pace);
+    } else if (this.fracture && g.crack < 0.001 && this.crackWasOn) this.fracture.reset();
+    this.crackWasOn = g.crack > 0.001;
+    U.uCrackTex.value = this.fracture?.texture ?? null;
+    // mould: mycelium filaments from the DLA growth generator
+    if (g.mycel > 0.001 && !this.mycelTex) {
+      this.mycelTex = makeGrowthTexture('centre', { particles: 9000 });
+      this.disposables.push(this.mycelTex);
+    }
+    U.uMycelTex.value = this.mycelTex;
+    // orchid: the bloom unfurls from a closed bud over ~9 s
+    if (g.petal > 0.5) this.openT = Math.min(1, this.openT + (dt * Math.max(this.pace, 0.5)) / 9);
+    else if (g.petal < 0.02) this.openT = 0;
+    U.uOpen.value = this.openT;
+    // Turrell: the field drifts through deep mauve, warm apricot, pale seafoam, dusty rose (~4 min each)
+    {
+      const cols = TURRELL_COLS;
+      const ph = (((this.clock / 240) % cols.length) + cols.length) % cols.length;
+      const i0 = Math.floor(ph);
+      const k = ph - i0;
+      const e = k * k * (3 - 2 * k);
+      U.uLightCol.value.copy(cols[i0]).lerp(cols[(i0 + 1) % cols.length], e);
+    }
+    U.uPetal.value = g.petal;
+    U.uGill.value = g.gill;
+    U.uCap.value = g.gill;
+    U.uPetalShape.value = g.petal;
+    U.uRootShape.value = g.root;
+    U.uMouldShape.value = g.mycel;
+    U.uSquash.value = g.sss;
+    U.uRoot.value = g.root;
+    U.uSss.value = g.sss;
+    U.uMatte.value = g.matte;
+    if (g.root > 0.001 && !this.rootTex) {
+      this.rootTex = makeRootTexture();
+      this.disposables.push(this.rootTex);
+    }
+    U.uRootTex.value = this.rootTex;
     U.uJelly.value.set(j.x, j.y);
     U.uJellyAmt.value = jl;
     U.uFluid.value = fl;
     U.uVideoOn.value = this.videoOn;
-    U.uVideoMix.value = 1 - 0.15 * (1 - this.mat[0]);
-    U.uMatA.value.set(this.mat[0], this.mat[1], this.mat[2], this.mat[3]);
-    U.uMatB.value.set(this.mat[4], this.mat[5], this.mat[6], this.mat[7]);
+    U.uVideoMix.value = 1 - 0.15 * (1 - g.origin);
     U.uPat.value.set(this.pat[0], this.pat[1], this.pat[2], this.pat[3]);
     this.pal.forEach((c, i) => (U[`uPal${i}` as 'uPal0'].value as THREE.Color).copy(c));
     U.uReduced.value = reduced ? 1 : 0;
@@ -630,44 +977,80 @@ export class OrbScene {
 
     U.uRadius.value = BASE_R;
 
-    // particles
-    const dustAmt = this.mat[3];
-    const powderAmt = this.mat[7];
-    (this.dust.material as THREE.ShaderMaterial).uniforms.uAmt.value = dustAmt;
-    (this.powder.material as THREE.ShaderMaterial).uniforms.uAmt.value = powderAmt;
-    this.dust.visible = dustAmt > 0.01;
-    this.powder.visible = powderAmt > 0.01;
+    // generator 4: particulate
+    const setPts = (pts: THREE.Points[], amt: number) =>
+      pts.forEach((p) => {
+        (p.material as THREE.ShaderMaterial).uniforms.uAmt.value = amt;
+        p.visible = amt > 0.01;
+      });
+    setPts(this.dust, g.dust);
+    setPts(this.nebula, g.nebula);
+    setPts(this.droplets, g.drop);
+    setPts(this.specks, g.specks);
+    // medusa: the bell contracts every few seconds (quick squeeze, slow release), paced
+    U.uEmit.value = g.emit;
+    U.uBell.value = g.emit;
+    if (g.emit > 0.001) {
+      this.pulseClock += dt * this.pace;
+      const ph = (this.pulseClock % 5.5) / 5.5;
+      const squeeze = ph < 0.22 ? Math.sin((ph / 0.22) * Math.PI * 0.5) : Math.max(0, 1 - (ph - 0.22) / 0.78);
+      U.uPulse.value = squeeze * squeeze * (3 - 2 * squeeze);
+      // the arms trail the pointer's motion: they swing against it, then drift back
+      const vx = (this.pointer.x - this.lastPointerX) / Math.max(dt, 1e-3);
+      this.armSway = damp(this.armSway, Math.max(-1.5, Math.min(1.5, -vx * 0.25 + this.pointer.x * 0.15)), 0.9, dt);
+    }
+    this.lastPointerX = this.pointer.x;
+    this.backU.uArms.value = g.emit;
+    this.backU.uArmSway.value.set(this.armSway, 0);
 
-    // fog volume
-    const fogAmt = Math.min(1, Math.max(this.mat[4], f.haze * 0.85));
+    // generator 5: volumetric scatter
+    const fogAmt = Math.min(1, Math.max(g.scatter, f.haze * 0.85, g.nebula * 0.9));
     U.uFogAmt.value = fogAmt;
     this.paletteJS(0.35 + this.patternTime * 0.008, this.tmpC);
-    U.uHazeColor.value.copy(this.tmpC).lerp(this.tmpC2.setRGB(0.85, 0.85, 0.9), 0.45);
+    // haze is greyed toward white, except in Janssens' coloured-light mode where it keeps its colour
+    U.uHazeColor.value.copy(this.tmpC).lerp(this.tmpC2.setRGB(0.85, 0.85, 0.9), 0.45 * (1 - 0.85 * f.prism));
     this.fogMeshes.forEach((m, i) => {
       m.visible = fogAmt > 0.01;
       if (!m.visible) return;
-      // camera-facing slices stacked through the ball, each clipped to the sphere's cross-section
-      const z = FOG_LAYERS[i] * BASE_R * 0.92;
-      m.position.z = z;
-      m.scale.setScalar(Math.max(0.05, Math.sqrt(Math.max(0, BASE_R * BASE_R * 0.85 - z * z))));
+      // camera-facing slices through and around the ball; the shader splits inside / spilled
+      const zf = FOG_LAYERS[i % FOG_LAYERS.length];
+      const half = Math.sqrt(Math.max(0.0025, FOG_EXTENT * FOG_EXTENT - zf * zf));
+      m.position.z = zf * BASE_R;
+      m.scale.setScalar(half * BASE_R);
+      const u = (m.material as THREE.ShaderMaterial).uniforms;
+      u.uSliceZ.value = zf;
+      u.uSliceScale.value = half;
     });
 
-    // backdrop
-    // Background halo stays in shades of blue (deep cobalt drifting to periwinkle),
-    // never the palette's greens; time of day only nudges it.
-    const drift = 0.5 + 0.5 * Math.sin(this.patternTime * 0.05);
-    this.tmpC.copy(BACK_BLUE_DEEP).lerp(BACK_BLUE_SOFT, drift);
-    this.tmpC2.setRGB(1, 1, 1).lerp(this.lightColor, 0.3);
-    this.backU.uGlowColor.value.copy(this.tmpC).multiply(this.tmpC2);
-    this.backU.uGlow.value = f.glow + this.sessionW * (0.04 + 0.06 * this.breath) + fogAmt * 0.06;
+    // ---- luminous field ----
+    // Four large colour fields swing through the whole active palette (not one
+    // colour family); the orb's own light bleeds into it past the silhouette.
+    const ft = this.fieldTime * 0.045;
+    const lightK = this.tmpC2.setRGB(1, 1, 1).lerp(this.lightColor, 0.35);
+    const fieldCols = [U.uFieldA.value, U.uFieldB.value, U.uFieldC.value, U.uFieldD.value];
+    fieldCols.forEach((c, i) => this.paletteJS(ft + i * 0.5 + (i % 2) * 0.13, c).multiply(lightK));
+    this.paletteJS(ft + 1.25, U.uFieldDeep.value).multiplyScalar(0.035).add(this.tmpC.setRGB(0.004, 0.005, 0.012));
+    U.uFieldTime.value = this.fieldTime;
+    // the deep sea: bioluminescence looks best in the dark, so the field dims under medusa
+    // deep space / deep sea: the field dims for the nebula and the medusa
+    U.uFieldLevel.value = (1 - 0.75 * g.emit) * (1 - 0.85 * g.nebula) * (0.034 + 0.026 * f.glow / 0.38) * (0.55 + 0.45 * this.lightInt) * (1 - ganz * 0.5);
+    this.paletteJS(this.patternTime * 0.03 + 0.4, U.uBleed.value).multiply(lightK);
+    U.uBleedAmt.value = 0.055 + f.glow * 0.12 + this.sessionW * (0.02 + 0.04 * this.breath) + fogAmt * 0.03;
+    this.updateOrbScreen();
+
     this.paletteJS(this.patternTime * 0.03 + 0.125, this.tmpC);
     this.backU.uFieldColor.value
       .copy(this.tmpC)
       .multiplyScalar(0.85)
       .multiply(this.tmpC2.setRGB(1, 1, 1).lerp(this.lightColor, 0.38).multiplyScalar(this.lightInt).add(this.ambient));
-    this.backU.uGanz.value = ganz;
 
-    this.bloom.strength = 0.4 - ganz * 0.22 - this.sessionW * 0.1 + f.disc * 0.12;
+    this.bloom.strength = 0.4 - ganz * 0.22 - this.sessionW * 0.1 + f.disc * 0.12 + U.uBloom.value * 0.3;
+    // Turrell's light: bloom at maximum, threshold near zero, so no edge survives
+    // (as wide and soft as it goes, but held below the point where the colour turns to white)
+    this.bloom.strength += g.field * 0.3;
+    this.bloom.threshold = 0.72 - 0.5 * g.field;
+    this.bloom.radius = 0.55 + 0.45 * g.field;
+    U.uBleedAmt.value += U.uBloom.value * 0.14;
 
     this.composer.render(dt);
   };

@@ -1,31 +1,143 @@
+import { useState } from 'react';
 import { store, useStore } from '../state/store';
-import { MATERIALS } from '../data/materials';
+import { MATERIAL_BY_ID, MATERIALS, groupsWithMaterials, type MaterialGroupId, type MaterialPreset } from '../data/materials';
 import { PATTERNS } from '../data/patterns';
 import { ARTISTS } from '../data/artists';
 import { SESSIONS } from '../data/sessions';
-import type { ArtistId, VideoPref } from '../state/types';
-import { Option, Label, glass, glassBtn } from './ui';
-import { startSession } from './hooks';
+import { BREATH_PRESETS } from '../time/breath';
+import type { ArtistId, MaterialId, SessionId } from '../state/types';
+import { CircleButton, Option, Label, PrimaryButton, glass, glassBtn } from './ui';
+import { setBreathPreset, startSession } from './hooks';
 
 type Variant = 'row' | 'chip';
 const wrap = (v: Variant) => (v === 'row' ? 'flex flex-col gap-0.5' : 'flex gap-2 overflow-x-auto no-scrollbar pb-1');
 
+/** Materials offered right now: session mode leaves out anything with sharp onsets. */
+function useAllowed() {
+  const mode = useStore((s) => s.mode);
+  return (m: MaterialPreset) => mode === 'play' || m.sessionSafe;
+}
+
+function shuffleMaterial(allowed: (m: MaterialPreset) => boolean) {
+  const cur = store.get().material;
+  const pool = MATERIALS.filter((m) => allowed(m) && m.id !== cur);
+  if (pool.length) store.set({ material: pool[Math.floor(Math.random() * pool.length)].id });
+}
+
+function ShuffleIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 7h3.5c4 0 6.5 10 10.5 10H21M3 17h3.5c1.6 0 3-1.6 4.2-3.6M13.3 9.6C14.5 8 15.7 7 17 7h4" />
+      <path d="M18 4l3 3-3 3M18 14l3 3-3 3" />
+    </svg>
+  );
+}
+
+/**
+ * Grouped material picker (play mode). Groups expand inline, never into a nested
+ * menu; a one-material group selects directly. Empty groups are hidden.
+ */
 export function MaterialPicker({ variant = 'row' }: { variant?: Variant }) {
   const material = useStore((s) => s.material);
+  const allowed = useAllowed();
+  const groups = groupsWithMaterials(allowed);
+  const activeGroup = MATERIAL_BY_ID[material].group;
+  const [open, setOpen] = useState<MaterialGroupId | null>(activeGroup);
+  const pick = (id: MaterialId) => {
+    // some materials are made for long sessions (medusa: 42 / 60 min): nudge a shorter length up
+    const pairs = MATERIAL_BY_ID[id].pairsWith;
+    const len = store.get().sessionLength;
+    store.set(pairs && !pairs.includes(len) && len !== 'open' ? { material: id, sessionLength: pairs[0] } : { material: id });
+  };
+  const openGroup = groups.find((g) => g.id === open);
+
+  const shuffle = (
+    <CircleButton aria-label="Shuffle material" title="Shuffle: pick one for me" onClick={() => shuffleMaterial(allowed)} size={variant === 'row' ? 30 : 34}>
+      <ShuffleIcon />
+    </CircleButton>
+  );
+
+  if (variant === 'chip') {
+    return (
+      <div className="flex flex-col gap-2">
+        <div role="group" aria-label="Material groups" className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+          {shuffle}
+          {groups.map((g) => {
+            const single = g.items.length === 1;
+            return (
+              <Option
+                key={g.id}
+                variant="chip"
+                active={g.id === activeGroup}
+                aria-expanded={single ? undefined : open === g.id}
+                swatch={single ? g.items[0].swatch : undefined}
+                className={!single && open === g.id && g.id !== activeGroup ? 'ring-1 ring-white/25 text-white/85' : ''}
+                onClick={() => {
+                  setOpen(g.id);
+                  if (single) pick(g.items[0].id);
+                }}
+              >
+                {g.label}
+              </Option>
+            );
+          })}
+        </div>
+        {openGroup && openGroup.items.length > 1 && (
+          <div role="group" aria-label={openGroup.label} className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+            {openGroup.items.map((m) => (
+              <Option key={m.id} variant="chip" active={material === m.id} swatch={m.swatch} hint={m.hint} onClick={() => pick(m.id)}>
+                {m.label}
+              </Option>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div role="group" aria-label="Consistency" className={wrap(variant)}>
-      {MATERIALS.map((m) => (
-        <Option
-          key={m.id}
-          variant={variant}
-          active={material === m.id}
-          swatch={m.swatch}
-          hint={m.hint}
-          onClick={() => store.set({ material: m.id })}
-        >
-          {m.id === 'default' ? 'Default · My Animation' : m.label}
-        </Option>
-      ))}
+    <div role="group" aria-label="Material" className="flex flex-col gap-0.5">
+      {groups.map((g) => {
+        const single = g.items.length === 1;
+        const expanded = !single && open === g.id;
+        return (
+          <div key={g.id}>
+            <Option
+              variant="row"
+              active={g.id === activeGroup && (single || !expanded)}
+              aria-expanded={single ? undefined : expanded}
+              swatch={single ? g.items[0].swatch : undefined}
+              hint={single ? g.items[0].hint : undefined}
+              onClick={() => {
+                if (single) {
+                  setOpen(g.id);
+                  pick(g.items[0].id);
+                } else setOpen(expanded ? null : g.id);
+              }}
+            >
+              <span className="flex items-baseline justify-between gap-2">
+                <span>{g.label}</span>
+                {!single && !expanded && g.id === activeGroup && (
+                  <span className="text-[11px] font-normal text-white/45">{MATERIAL_BY_ID[material].label}</span>
+                )}
+              </span>
+            </Option>
+            {expanded && (
+              <div className="flex flex-wrap gap-1.5 pl-3 pr-1 pt-1 pb-1.5">
+                {g.items.map((m) => (
+                  <Option key={m.id} variant="chip" active={material === m.id} swatch={m.swatch} hint={m.hint} onClick={() => pick(m.id)} className="!px-3 !py-1.5 !text-[12px]">
+                    {m.label}
+                  </Option>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-2 px-1 pt-2">
+        {shuffle}
+        <span className="text-[11px] text-white/40">Shuffle</span>
+      </div>
     </div>
   );
 }
@@ -59,6 +171,7 @@ export function ArtistPicker({ variant = 'row' }: { variant?: Variant }) {
           active={artist === a.id}
           swatch={ARTIST_SWATCH(a.id)}
           hint={a.inOrb}
+          display
           onClick={() => store.set({ artist: a.id, historyOpen: true })}
         >
           {a.label}
@@ -68,15 +181,68 @@ export function ArtistPicker({ variant = 'row' }: { variant?: Variant }) {
   );
 }
 
+const TIMED = SESSIONS.filter((x) => x.id !== 'free');
+
+/** Breath preset + length, then one white "Begin" pill. During a session: End. */
 export function SessionPicker({ variant = 'row' }: { variant?: Variant }) {
   const id = useStore((s) => s.session.id);
+  const preset = useStore((s) => s.breathPreset);
+  const len = useStore((s) => s.sessionLength);
+  const setLen = (v: SessionId) => store.set({ sessionLength: v });
+  const active = id !== 'free';
+  const chips = 'flex gap-1.5 flex-wrap';
+
   return (
-    <div role="group" aria-label="Meditation and break sessions" className={wrap(variant)}>
-      {SESSIONS.map((x) => (
-        <Option key={x.id} variant={variant} active={id === x.id} onClick={() => startSession(x.id)}>
-          {x.label}
-        </Option>
-      ))}
+    <div className={`flex flex-col ${variant === 'row' ? 'gap-3 px-1' : 'gap-3'}`}>
+      <div>
+        <Label className="mb-1.5 px-1">Breath</Label>
+        <div role="radiogroup" aria-label="Breathing pattern" className={chips}>
+          {BREATH_PRESETS.map((p) => (
+            <Option
+              key={p.id}
+              variant="chip"
+              role="radio"
+              aria-checked={preset === p.id}
+              active={preset === p.id}
+              hint={p.hint}
+              onClick={() => setBreathPreset(p.id)}
+              className="!px-3 !py-1.5 !text-[12px]"
+            >
+              {p.label}
+            </Option>
+          ))}
+        </div>
+      </div>
+      <div>
+        <Label className="mb-1.5 px-1">Length · minutes</Label>
+        <div role="radiogroup" aria-label="Session length" className={chips}>
+          {TIMED.map((x) => (
+            <Option
+              key={x.id}
+              variant="chip"
+              role="radio"
+              aria-checked={(active ? id : len) === x.id}
+              active={(active ? id : len) === x.id}
+              disabled={active}
+              onClick={() => setLen(x.id)}
+              className="!px-3 !py-1.5 !text-[12px] disabled:opacity-60"
+            >
+              {x.short}
+            </Option>
+          ))}
+        </div>
+      </div>
+      {active ? (
+        <button
+          type="button"
+          onClick={() => startSession('free')}
+          className={`${glass} h-10 rounded-full text-[13px] text-white/75 hover:text-white transition-colors`}
+        >
+          End session
+        </button>
+      ) : (
+        <PrimaryButton onClick={() => startSession(len)}>Begin</PrimaryButton>
+      )}
     </div>
   );
 }
@@ -90,7 +256,7 @@ export function SoundControl({ compact = false }: { compact?: boolean }) {
         type="button"
         aria-pressed={enabled}
         onClick={() => store.set((s) => ({ sound: { ...s.sound, enabled: !s.sound.enabled } }))}
-        className={`flex items-center gap-2 rounded-xl px-2.5 py-[7px] text-[12.5px] ${
+        className={`shrink-0 whitespace-nowrap flex items-center gap-2 rounded-full px-3.5 py-[7px] text-[12.5px] ${
           enabled ? glassBtn(true) : `${glassBtn(false)} border-white/10 text-white/60 hover:text-white/90`
         }`}
       >
@@ -128,39 +294,5 @@ function SpeakerIcon({ on }: { on: boolean }) {
         <path d="M17 9l4 6M21 9l-4 6" />
       )}
     </svg>
-  );
-}
-
-const SOURCE_LABEL: Record<VideoPref, string> = { auto: 'Auto', desktop: 'Desktop', phone: 'Phone' };
-
-export function SourceToggle() {
-  const pref = useStore((s) => s.videoPref);
-  const status = useStore((s) => s.videoStatus);
-  const active = useStore((s) => s.activeVideo);
-  const statusText =
-    status === 'ready' ? `${active} file` : status === 'fallback' ? 'phone missing → desktop' : status === 'missing' ? 'no video · procedural' : 'loading…';
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline justify-between gap-2">
-        <Label>Source</Label>
-        <span className="text-[10px] text-white/35 truncate">{statusText}</span>
-      </div>
-      <div className={`${glass} flex rounded-full p-0.5`} role="radiogroup" aria-label="Animation source">
-        {(['auto', 'desktop', 'phone'] as VideoPref[]).map((p) => (
-          <button
-            key={p}
-            type="button"
-            role="radio"
-            aria-checked={pref === p}
-            onClick={() => store.set({ videoPref: p })}
-            className={`flex-1 rounded-full px-2 py-1 text-[11px] ${
-              pref === p ? glassBtn(true) : `${glassBtn(false)} text-white/50 hover:text-white/80`
-            }`}
-          >
-            {SOURCE_LABEL[p]}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }
