@@ -65,9 +65,7 @@ export type VoiceSpec =
   /** a soft sift of bandpassed noise (organic rustles) */
   | { voice: 'hiss'; band: [number, number]; dur: Pair; amp: number }
   /** fracture ticks (tiny bright clicks) followed by a low settling (Ice) */
-  | { voice: 'crackle'; ticks: Pair; spread: number; band: [number, number]; settle: number; amp: number }
-  /** a shimmering spectral sweep: rising sine steps, staggered (Prism) */
-  | { voice: 'shimmer'; base: number[]; steps: number; interval: number; stagger: Pair; decay: number; amp: number };
+  | { voice: 'crackle'; ticks: Pair; spread: number; band: [number, number]; settle: number; amp: number };
 
 export interface SoundSpec {
   bed: BedLayer[];

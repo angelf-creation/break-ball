@@ -1,4 +1,4 @@
-import { NOISE, SURFACE, LOOK, FIELD, DISPERSION, GEM } from './chunks';
+import { NOISE, SURFACE, LOOK, FIELD } from './chunks';
 
 /** Dust (additive motes) and Powder (matte pigment grains) share one vertex shader. */
 export const particleVertex = /* glsl */ `
@@ -148,49 +148,13 @@ export const backdropFragment = /* glsl */ `
 ${NOISE}
 ${LOOK}
 ${FIELD}
-${DISPERSION}
-${GEM}
-uniform float uGem;        // prism: each flat face throws a sharp spectrum band
-uniform mat3 uGroupRot;    // the gem's rotation
 uniform vec3 uFieldColor; // Ganzfeld pattern: the field floods to one colour
-uniform float uSpectralAmt; // prism: spectral caustics thrown onto the field
 varying vec2 vUv;
 void main(){
   vec3 c = fieldColor(vUv);
   vec2 q = (vUv - uCenter) * vec2(uAspect, 1.0);
   float d = length(q);
   c = mix(c, uFieldColor * (0.5 + 0.3 * exp(-d * d * 1.4)), uGanz * 0.88);
-  // Prism: every side-facing flat face of the gem throws one sharp spectrum band out
-  // into the scene, in the direction that face points; they turn with the gem.
-  if (uGem > 0.002){
-    vec2 o = (vUv - uCenter) * vec2(uAspect, 1.0) / max(uOrbR, 1e-3);
-    float rho = length(o);
-    float phi = atan(o.y, o.x);
-    vec3 acc = vec3(0.0);
-    for (int i = 0; i < 14; i++){
-      vec3 n = normalize(uGroupRot * normalize(gemPlane(i).xyz));
-      float side = 1.0 - abs(n.z);
-      if (side < 0.35) continue;
-      float th = atan(n.y, n.x);
-      float da = mod(phi - th + 3.14159265, 6.2831853) - 3.14159265;
-      float w = 0.045;
-      float band = (1.0 - smoothstep(w * 0.85, w, abs(da))) * smoothstep(1.05, 1.3, rho) * (1.0 - smoothstep(2.0, 3.6, rho));
-      acc += spectral(clamp(da / w * 0.5 + 0.5, 0.0, 1.0)) * band * side;
-    }
-    c += acc * 0.22 * uGem;
-  }
-
-  // Projected spectral caustics (prism): an animated pattern, not photon mapping.
-  // A pool of split light thrown below and to the side of the orb, slowly shifting.
-  if (uSpectralAmt > 0.002){
-    vec2 o = (vUv - uCenter) * vec2(uAspect, 1.0) / max(uOrbR, 1e-3); // in orb radii
-    vec2 cq = o - vec2(0.6, -1.5);
-    float m = exp(-sq(cq.x / 1.5) - sq(cq.y / 0.42));
-    float t = uFieldTime * 0.05;
-    float band = fract(cq.x * 0.32 + 0.07 * sin(cq.y * 3.0 + t * 2.0) + t * 0.08);
-    float lines = pow(0.5 + 0.5 * sin((cq.x * 6.0 + 0.6 * sin(cq.y * 5.0 + t * 3.0) + t) * 3.14159), 5.0);
-    c += spectral(band) * m * (0.25 + 0.75 * lines) * uSpectralAmt * 0.22;
-  }
   gl_FragColor = vec4(c, 1.0);
 }
 `;

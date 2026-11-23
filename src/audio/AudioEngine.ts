@@ -1,6 +1,7 @@
 import { store } from '../state/store';
 import { MATERIAL_ORDER, type MaterialId } from '../state/types';
 import { breathAt, sessionElapsed } from '../time/breath';
+import { soundLevel } from './level';
 import { makeNoiseBuffers, type NoiseBuffers } from './noise';
 import { MATERIAL_BY_ID } from '../data/materials';
 import type { BedLayer, VoiceSpec } from './spec';
@@ -22,7 +23,7 @@ import type { MixLevels } from '../state/types';
 
 /** loudest each mixer channel gets at slider 1 (balances very different sources) */
 const CH_MAX: Record<keyof MixLevels, number> = {
-  orb: 1, rain: 0.5, wind: 0.45, waves: 0.55, forest: 0.8, birdsong: 0.6, fire: 0.6, night: 0.5, tone40: 0.22, tone136: 0.07, binaural: 0.06, breath: 1.4,
+  orb: 1, rain: 0.5, wind: 0.45, waves: 0.55, forest: 0.8, birdsong: 0.6, tone40: 0.22, tone136: 0.07, binaural: 0.06, breath: 1.4,
 };
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
@@ -193,6 +194,11 @@ export class AudioEngine {
     this.master.gain.value = 0;
     this.bus = ctx.createGain();
     this.bus.connect(lp).connect(comp).connect(this.master).connect(ctx.destination);
+    // listening only: the visuals answer what is actually heard (after the volume)
+    this.ear = ctx.createAnalyser();
+    this.ear.fftSize = 1024;
+    this.ear.smoothingTimeConstant = 0.8;
+    this.master.connect(this.ear);
 
     // mixer channels, each with its own level
     const mixCh = (k: keyof MixLevels) => {
@@ -227,8 +233,6 @@ export class AudioEngine {
     // recorded nature (synthesis can't fake birds); loaded only when first turned up
     mixCh('forest');
     mixCh('birdsong');
-    this.buildFire(mixCh('fire'));
-    this.buildNight(mixCh('night'));
     // pure tones (labelled neutrally in the UI: frequency only, no claims)
     this.osc('sine', 40).connect(mixCh('tone40'));
     this.osc('sine', 136.1).connect(mixCh('tone136'));
@@ -381,71 +385,30 @@ export class AudioEngine {
     b.connect(this.filter('lowpass', 220)).connect(this.gain(0.4)).connect(out);
   }
 
-  private fireOut: GainNode | null = null;
-  private buildFire(out: GainNode) {
-    // the body: a low roar that flickers; the hiss of the flames above it
-    const g = this.gain(0.85);
-    this.lfo(g.gain, 0.37, 0.16);
-    this.lfo(g.gain, 0.91, 0.1);
-    this.loop(this.nb.brown).connect(this.filter('lowpass', 260)).connect(g).connect(out);
-    const h = this.gain(0.16);
-    this.lfo(h.gain, 0.53, 0.07);
-    const f = this.filter('bandpass', 900, 0.6);
-    this.lfo(f.frequency, 0.21, 300);
-    this.loop(this.nb.pink).connect(f).connect(h).connect(out);
-    this.fireOut = out;
-  }
-
-  private nightOut: GainNode | null = null;
-  private owlAt = 0;
-  private buildNight(out: GainNode) {
-    // air moving in the leaves
-    const g = this.gain(0.16);
-    this.lfo(g.gain, 0.06, 0.08);
-    this.loop(this.nb.pink).connect(this.filter('bandpass', 700, 0.5)).connect(g).connect(out);
-    this.loop(this.nb.brown).connect(this.filter('lowpass', 140)).connect(this.gain(0.3)).connect(out);
-    // crickets: a high tone, fluttering fast, in slow chirps; three at different distances
-    const crickets: [number, number, number, number, number][] = [
-      [4250, 31, 1.15, 0.02, -0.6],
-      [4520, 27, 0.83, 0.014, 0.5],
-      [3980, 36, 0.61, 0.01, 0.1],
-    ];
-    for (const [hz, flutter, chirp, level, pan] of crickets) {
-      const a = this.gain(0.5);
-      this.lfo(a.gain, flutter, 0.5);
-      const b = this.gain(0.4);
-      this.lfo(b.gain, chirp, 0.6);
-      const c = this.gain(level);
-      this.lfo(c.gain, 0.04 + chirp * 0.02, level * 0.6);
-      this.osc('sine', hz).connect(a).connect(b).connect(c).connect(this.panner(pan, out));
+  private ear!: AnalyserNode;
+  private wave = new Float32Array(1024);
+  private spec = new Uint8Array(512);
+  private listen() {
+    let energy = 0, low = 0, tone = 0;
+    if (this.enabled && this.ear) {
+      this.ear.getFloatTimeDomainData(this.wave);
+      let sum = 0;
+      for (const x of this.wave) sum += x * x;
+      energy = Math.min(1, Math.sqrt(sum / this.wave.length) * 11);
+      this.ear.getByteFrequencyData(this.spec);
+      for (let i = 0; i < 6; i++) low += this.spec[i] / 255 / 6;
+      const m = store.get().mix;
+      tone = Math.min(1, (m.tone40 + m.tone136 + m.binaural) * 1.2);
     }
-    this.nightOut = out;
-  }
-
-  private owl(t: number) {
-    const ctx = this.ctx!;
-    const out = this.panner(rnd(-0.7, 0.7), this.nightOut!);
-    const lp = this.filter('lowpass', 700);
-    lp.connect(out);
-    [[0, 0.32, 0.1], [0.75, 0.16, 0.07], [1.0, 0.75, 0.12]].forEach(([at, dur, amp]) => {
-      const o = ctx.createOscillator();
-      o.type = 'sine';
-      const ts = t + at;
-      o.frequency.setValueAtTime(352, ts);
-      o.frequency.linearRampToValueAtTime(372, ts + dur * 0.4);
-      o.frequency.linearRampToValueAtTime(338, ts + dur);
-      const e = ctx.createGain();
-      e.gain.setValueAtTime(0.0001, ts);
-      e.gain.linearRampToValueAtTime(amp, ts + dur * 0.35);
-      e.gain.linearRampToValueAtTime(0.0001, ts + dur);
-      o.connect(e).connect(lp);
-      o.start(ts);
-      o.stop(ts + dur + 0.05);
-    });
+    // eased twice (here and in the scene): it swells, it never jumps
+    soundLevel.energy += (energy - soundLevel.energy) * 0.12;
+    soundLevel.low += (low - soundLevel.low) * 0.12;
+    soundLevel.tone += (tone - soundLevel.tone) * 0.08;
   }
 
   private tick() {
     const ctx = this.ctx;
+    this.listen();
     if (!ctx || !this.enabled) return;
     const s = store.get();
     if (s.material !== this.currentMaterial) this.setMaterial(s.material);
@@ -480,24 +443,6 @@ export class AudioEngine {
           .connect(this.filter('bandpass', rnd(2500, 7000), 2))
           .connect(this.env(ti, 0.001, dur, rnd(0.05, 0.16), this.panner(rnd(-0.8, 0.8), this.rainOut)));
       }
-    }
-    // fire: embers ticking, with now and then a louder pop and a small flurry after it
-    const fire = s.mix.fire;
-    if (fire > 0.01 && this.fireOut) {
-      const n = Math.random() < 0.06 ? 4 + Math.floor(Math.random() * 5) : Math.round(Math.random() * 1.3);
-      for (let i = 0; i < n; i++) {
-        const ti = now + Math.random() * dt;
-        const pop = Math.random() < 0.05;
-        const dur = pop ? rnd(0.02, 0.05) : rnd(0.003, 0.012);
-        this.burst(pop ? this.nb.pink : this.nb.white, ti, dur)
-          .connect(this.filter('bandpass', pop ? rnd(500, 1300) : rnd(1400, 5200), pop ? 1.2 : 2.5))
-          .connect(this.env(ti, 0.001, dur, pop ? rnd(0.3, 0.6) : rnd(0.04, 0.22), this.panner(rnd(-0.5, 0.5), this.fireOut)));
-      }
-    }
-    // night forest: a distant owl, about once a minute
-    if (s.mix.night > 0.01 && this.nightOut && now > this.owlAt) {
-      if (this.owlAt > 0) this.owl(now + 0.1);
-      this.owlAt = now + rnd(28, 80);
     }
     const active = s.session.id !== 'free' && s.session.startedAt != null;
     const b = active ? breathAt(sessionElapsed(s.session.startedAt), s.breathPreset).value : 0;
@@ -628,23 +573,6 @@ export class AudioEngine {
           this.burst(this.nb.brown, ts, 0.4)
             .connect(this.filter('lowpass', 300))
             .connect(this.env(ts, 0.06, 0.35, v.settle * amp, out));
-        }
-        break;
-      }
-      case 'shimmer': {
-        // a rising run of sine steps, each a little higher, staggered: light splitting into colour
-        let f = pick(v.base);
-        const steps = touch ? v.steps : Math.max(2, Math.round(v.steps / 2));
-        for (let i = 0; i < steps; i++) {
-          const ti = t + i * tw(v.stagger);
-          const o = ctx.createOscillator();
-          o.type = 'sine';
-          o.frequency.value = f;
-          const p = this.panner(Math.max(-1, Math.min(1, pan + (i / steps - 0.5) * 0.8)), dest);
-          o.connect(this.env(ti, 0.004, v.decay, (v.amp * amp) / (1 + i * 0.15), p));
-          o.start(ti);
-          o.stop(ti + v.decay + 0.3);
-          f *= v.interval;
         }
         break;
       }

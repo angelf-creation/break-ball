@@ -1,4 +1,4 @@
-import { NOISE, SURFACE, LOOK, FIELD, DISPERSION, GEM } from './chunks';
+import { NOISE, SURFACE, LOOK, FIELD, DISPERSION } from './chunks';
 
 export const orbVertex = /* glsl */ `
 ${NOISE}
@@ -27,7 +27,6 @@ ${NOISE}
 ${LOOK}
 ${FIELD}
 ${DISPERSION}
-${GEM}
 uniform float uTime;
 uniform sampler2D uVideo;
 uniform float uVideoOn;
@@ -42,8 +41,6 @@ uniform float uClarity; // 1: see-through shell (interior particles / fog show)
 uniform float uCaustic; // 1: moving caustics (water)
 uniform float uFilm;    // 2: thin-film rim
 uniform float uSoft;    // 6: wrapped light / subsurface
-uniform float uSpectral; // 2: dispersion (prism; crystal fringes)
-uniform float uGem;      // prism: rough-cut polyhedron (shape in chunks.ts)
 uniform mat3 uViewRot;      // object -> view rotation: patterns live on the surface and turn with it
 uniform float uPrint;       // pillow: how much of the pattern / artist is printed on the cloth
 uniform mat3 uGroupRot;      // the ball's rotation (object -> world), for facet normals
@@ -53,6 +50,9 @@ uniform float uGrow;        // root: how far the growth front has come, 0..1
 uniform float uGrowFade;    // root: fades the old network before the next one starts
 uniform float uSss;     // pure subsurface (marshmallow)
 uniform float uCreature; // 0..1: the skin gives way to a modelled scene (scene/creatures)
+uniform float uAuraMat; // Soft Light: light diffused through frosted glass
+uniform vec3 uSonic;
+uniform float uSonicT;
 uniform float uMatte;   // no gloss, film or mirror
 uniform float uScale;   // breath scale of the whole orb
 uniform vec2 uResolution;
@@ -494,31 +494,12 @@ void main(){
     vec2 off = (-p * 0.16 * r * r + dN * 0.6) * uRefract;
     vec2 q = -(p * 0.85) + off;
     vec3 wall;
-    // dispersion: each band of the spectrum bends by a slightly different amount, so
-    // colour only appears where light bends hard (edges, folds); the body stays clear
-    float bend = length(off) / max(uRefract, 0.05) + length(dN) * 1.5 + pow(1.0 - NdV, 3.0) * 0.8;
-    vec3 specW = vec3(0.0);
-    if (uSpectral > 0.002){
-      float spread = uSpectral * (0.02 + bend) * 1.1;
-      vec3 acc = vec3(0.0), wsum = vec3(0.0);
-      for (int i = 0; i < 5; i++){
-        float w = float(i) / 4.0;
-        vec3 sw = spectral(w);
-        acc += sw * lum(refrSource(q * (1.0 + (w - 0.5) * spread)));
-        wsum += sw;
-      }
-      specW = acc / max(wsum, vec3(1e-3)) * 1.15;
-    }
     wall.r = refrSource(q * 0.97).r;
     wall.g = refrSource(q).g;
     wall.b = refrSource(q * 1.03).b;
     // the bright field behind the orb, bent by the same lens
     vec2 so = (-p * 0.55 * T + dN * 0.5) * uOrbR * vec2(1.0 / uAspect, 1.0) * uRefract;
     vec3 behind = fieldColor(clamp(suv + so, 0.0, 1.0));
-    wall = mix(wall, specW, uSpectral);
-    // prism: colourless where light barely bends
-    float drain = uSpectral * (1.0 - smoothstep(0.1, 0.6, bend)) * 0.85;
-    wall = mix(wall, vec3(lum(wall)), drain);
     vec3 refr = wall * 0.75 + behind * (0.55 + 0.45 * (1.0 - T));
     through = mix(through, refr, clamp(uRefract * 1.5, 0.0, 1.0));
   }
@@ -607,6 +588,30 @@ void main(){
   }
 #endif
 
+  // ---- soft light: a lamp seen through frosted glass ----
+#ifdef G_AURA
+  if (uAuraMat > 0.002){
+    // an unseen source drifting slowly inside; its light thins with distance, never an edge
+    vec2 src = 0.24 * vec2(sin(uTime * 0.11), cos(uTime * 0.083));
+    float dl = length(p - src);
+    float depthG = exp(-dl * dl * 1.7);
+    float slow = 0.5 + 0.5 * snoise(p * 0.8 + vec2(uTime * 0.02, -uTime * 0.015));
+    vec3 warm = mix(vec3(1.0, 0.8, 0.62), palette(0.2 + slow * 0.5), 0.12);
+    vec3 cool = mix(vec3(0.34, 0.36, 0.62), palette(0.7 + 0.3 * p.y), 0.18);
+    vec3 lg = mix(cool * 0.4, warm, smoothstep(0.0, 1.0, depthG));
+    lg += vec3(1.0, 0.94, 0.86) * exp(-dl * dl * 7.0) * 0.28;
+    // a second, fainter light from the other side gives it volume
+    lg += cool * 0.35 * exp(-dot(p + src * 2.2 - vec2(0.35, 0.3), p + src * 2.2 - vec2(0.35, 0.3)) * 2.4);
+    float wrapA = (dot(N, L) + 0.9) / 1.9;
+    lg *= 0.55 + 0.5 * wrapA;
+    lg *= mix(0.42, 1.0, smoothstep(0.0, 0.75, NdV));              // rounds away softly at the limb
+    lg *= 0.975 + 0.05 * hash12(gl_FragCoord.xy * 0.7);              // the frost: a trace of grain
+    // frosted skin: a wide, powdery sheen
+    lg += warm * 0.1 * pow(NdH, 6.0);
+    body = mix(body, lg * 0.92, uAuraMat);
+  }
+#endif
+
   // ---- pillow: plush velvet, printable ----
 #ifdef G_SSS
   if (uSss > 0.002){
@@ -671,16 +676,6 @@ void main(){
   }
 #endif
 
-  // ---- prism: the rough-cut gem's edges catch a thin bright line and a spectrum ----
-#ifdef G_GEM
-  if (uGem > 0.002){
-    vec2 gr = gemRadius(normalize(vDir));
-    float ge = 1.0 - smoothstep(0.0, 0.035 + fwidth(gr.y), gr.y);
-    body += (vec3(1.0) * ge * 0.35 + spectral(fract(gr.y * 9.0 + dot(N, V) * 1.5)) * ge * 0.45) * uGem;
-    body = mix(body, vec3(lum(body)) * 1.05, 0.55 * uGem * (1.0 - ge)); // a near-colourless body
-  }
-#endif
-
   // glossy surface: environment reflection + speculars (all non-mirror materials)
   // Turrell's field is matte and even, like fog: no sharp speculars in his mode
   // frost diffuses reflections (frosted, it glows rather than mirrors)
@@ -725,6 +720,8 @@ void main(){
   // Janssens: the outer third melts into the background
   alpha *= 1.0 - uSoften * smoothstep(0.45, 1.0, r) * 0.92;
   alpha *= 1.0 - uCreature;
+  // sound: rings of soft shimmer over the skin
+  col *= 1.0 + uSonic.x * (0.05 + 0.06 * sin(r * (10.0 + 9.0 * uSonic.z) - uSonicT));
   // never let a bad pixel reach the bloom
   if (!(col.r >= 0.0 && col.g >= 0.0 && col.b >= 0.0)) col = max(base, vec3(0.0));
   gl_FragColor = vec4(min(max(col, 0.0), vec3(12.0)), clamp(alpha, 0.0, 1.0));

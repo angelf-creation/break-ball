@@ -55,8 +55,6 @@ export function SoundPanel() {
         <Slider k="waves" label="Waves" />
         <Slider k="forest" label="Forest" />
         <Slider k="birdsong" label="Birdsong" />
-        <Slider k="fire" label="Crackling fire" />
-        <Slider k="night" label="Night forest" />
       </section>
       <section>
         <Label className="mb-1">Frequencies</Label>

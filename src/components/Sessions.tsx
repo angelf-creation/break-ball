@@ -16,7 +16,7 @@ export function Sessions() {
   const active = id !== 'free';
   
   return (
-    <section aria-labelledby="sessions-heading" className="flex flex-col gap-4">
+    <section aria-labelledby="sessions-heading" className="flex flex-col gap-4 [@media(max-height:800px)]:gap-2.5">
       <h2 id="sessions-heading" className="font-display text-[25px] leading-none text-white">
         Sessions
       </h2>

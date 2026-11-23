@@ -11,16 +11,14 @@ import type { SoundSpec } from '../audio/spec';
  * materials is free.
  *
  *   1  Refraction + absorption  refract, absorb, clarity, reflect, caustic
- *   2  Structural colour        film (thin-film rim), spectral (dispersion: prism,
- *                               crystal fringes; shared with the Corse artist mode)
+ *   2  Structural colour        film (thin-film rim)
  *   3  Growth front          root (a branching network that creeps outward)
  *   6  (also)                 sss (pillow: plush cushion), matte
- *      Shape                  gem (prism: rough-cut polyhedron)
  *      Modelled scenes        petal, gill, emit, nebula, crack: real geometry or ray-cast
  *                             volumes in scene/creatures.ts that replace the skin
  *   4  (also)                 specks: bioluminescent motes that flash when disturbed
  *   4  Particulate              dust, specks, nebula
- *   5  Volumetric scatter       scatter
+ *   5  Diffused light           aura
  *   6  Soft body + subsurface   soft (wrapped light, translucency) + physics.jelly
  *
  * Adding a material = add its id to MaterialId / MATERIAL_ORDER, add a row here
@@ -42,8 +40,6 @@ export interface GeneratorMix {
   caustic: number;
   /** 2: thin-film iridescent rim */
   film: number;
-  /** 2: spectral dispersion: colour split by bend strength, so only edges and folds go rainbow */
-  spectral: number;
   /** 3: branching network growing over a luminous amber ground */
   root: number;
   /** the orchid (scene/creatures.ts) */
@@ -52,8 +48,6 @@ export interface GeneratorMix {
   gill: number;
   /** 6: plush cushion: velvet, printable with any pattern or artist (pillow) */
   sss: number;
-  /** rough-cut gem: the ball becomes a polyhedron of flat faces, each throwing a spectrum (prism) */
-  gem: number;
   /** a ball of deep space, ray-cast (scene/creatures.ts) */
   nebula: number;
   /** a ball of ice with thick crack planes inside; touching starts a new one (scene/creatures.ts) */
@@ -66,15 +60,15 @@ export interface GeneratorMix {
   specks: number;
   /** 4: suspended motes */
   dust: number;
-  /** 5: volumetric haze */
-  scatter: number;
+  /** light diffused through frosted glass (Soft Light) */
+  aura: number;
   /** 6: wrapped light / subsurface glow */
   soft: number;
 }
 
 export const NONE: GeneratorMix = {
   origin: 0, refract: 0, absorb: 0, clarity: 0, caustic: 0,
-  film: 0, spectral: 0, root: 0, petal: 0, gill: 0, sss: 0, gem: 0, nebula: 0, crack: 0, matte: 0, emit: 0, specks: 0, dust: 0, scatter: 0, soft: 0,
+  film: 0, root: 0, petal: 0, gill: 0, sss: 0, nebula: 0, crack: 0, matte: 0, emit: 0, specks: 0, dust: 0, aura: 0, soft: 0,
 };
 export const GEN_KEYS = Object.keys(NONE) as (keyof GeneratorMix)[];
 
@@ -154,7 +148,7 @@ export const MATERIALS: MaterialPreset[] = [
     },
   },
   {
-    id: 'powder', label: 'Space', hint: 'A galaxy held in a ball, turning slowly', group: 'mineral', sessionSafe: true,
+    id: 'powder', label: 'Space', hint: 'A galaxy of fine star dust, turning slowly', group: 'mineral', sessionSafe: true,
     swatch: 'radial-gradient(circle at 50% 110%,#5b7486,#0b0f14 55%,#000 80%)',
     gen: { ...NONE, nebula: 1 },
     physics: { rippleK: 16, rippleSpeed: 0.5, rippleDecay: 3.5, rippleAmp: 0.004, jelly: 0, fluid: 0 },
@@ -183,18 +177,6 @@ export const MATERIALS: MaterialPreset[] = [
     },
   },
   {
-    // flashes of spectrum: not in sessions
-    id: 'prism', label: 'Prism', hint: 'A rough-cut crystal; every face throws a spectrum', group: 'mineral', sessionSafe: false,
-    swatch: 'linear-gradient(135deg,#f2f3f5,#5d6068,#ff6a6a,#6ab4ff)',
-    gen: { ...NONE, refract: 1, spectral: 1, gem: 1 },
-    physics: { rippleK: 18, rippleSpeed: 0.8, rippleDecay: 3.0, rippleAmp: 0.005, jelly: 0, fluid: 0 },
-    sound: {
-      bed: [{ kind: 'tones', wave: 'sine', freqs: [1760, 2217.5, 2637], filter: { type: 'bandpass', freq: 2200, q: 2 }, gain: 0.005, swell: { rate: 0.03, depth: 0.7 }, drift: 4 }],
-      event: { voice: 'shimmer', base: [880, 987.77, 1174.66, 1318.5], steps: 6, interval: 1.122, stagger: [0.05, 0.11], decay: 0.9, amp: 0.018 },
-      rate: 0.3,
-    },
-  },
-  {
     id: 'jelly', label: 'Jelly', hint: 'Elastic wobble, translucency', group: 'soft', sessionSafe: true,
     swatch: 'linear-gradient(135deg,#ff9ad5,#b48bff)',
     gen: { ...NONE, origin: 0.55, refract: 0.35, absorb: 1.4, film: 0.4, soft: 1 },
@@ -220,7 +202,7 @@ export const MATERIALS: MaterialPreset[] = [
   {
     // the payoff of the system: soft body + structural colour + particulate, and it EMITS light.
     // Best material for a long session.
-    id: 'medusa', label: 'Medusa', hint: 'A jellyfish drifting in its own dark water', group: 'organic', sessionSafe: true,
+    id: 'medusa', label: 'Medusa', hint: 'Jellyfish in deep black water', group: 'organic', sessionSafe: true,
     swatch: 'radial-gradient(circle at 50% 30%,#b9772f,#7f86f0 35%,#05060f 80%)',
     gen: { ...NONE, emit: 1, specks: 0.6 },
     physics: { rippleK: 8, rippleSpeed: 0.3, rippleDecay: 1.2, rippleAmp: 0.02, jelly: 0.55, fluid: 0.1 },
@@ -233,7 +215,7 @@ export const MATERIALS: MaterialPreset[] = [
     pairsWith: ['m42', 'm60'],
   },
   {
-    id: 'flower', label: 'Night Orchid', hint: 'An orchid, breathing', group: 'organic', sessionSafe: true,
+    id: 'flower', label: 'Orchid', hint: 'An orchid, breathing, with fireflies', group: 'organic', sessionSafe: true,
     swatch: 'linear-gradient(135deg,#4a37c8,#b0186e,#d9c23a)',
     gen: { ...NONE, petal: 1 },
     physics: { rippleK: 12, rippleSpeed: 0.4, rippleDecay: 1.6, rippleAmp: 0.008, jelly: 0.1, fluid: 0 },
@@ -245,7 +227,7 @@ export const MATERIALS: MaterialPreset[] = [
     },
   },
   {
-    id: 'mushroom', label: 'Mushroom', hint: 'Fan caps and blue gills, softly lit', group: 'organic', sessionSafe: true,
+    id: 'mushroom', label: 'Mushroom', hint: 'Colour moving slowly through gills and veins', group: 'organic', sessionSafe: true,
     swatch: 'linear-gradient(135deg,#0a2a44,#2bb3cf,#ff7a2e)',
     gen: { ...NONE, gill: 1 },
     physics: { rippleK: 10, rippleSpeed: 0.35, rippleDecay: 1.8, rippleAmp: 0.006, jelly: 0.2, fluid: 0 },
@@ -269,17 +251,18 @@ export const MATERIALS: MaterialPreset[] = [
     },
   },
   {
-    id: 'fog', label: 'Fog', hint: 'Haze that spills past the glass', group: 'atmosphere', sessionSafe: true,
-    swatch: 'linear-gradient(135deg,#d9d6ee,#8f97b8)',
-    gen: { ...NONE, clarity: 0.85, absorb: 0.15, film: 0.35, scatter: 1 },
-    physics: { rippleK: 12, rippleSpeed: 0.35, rippleDecay: 1.2, rippleAmp: 0.01, jelly: 0, fluid: 0 },
+    // light diffused through frosted glass: nothing in the air, only a soft glow with depth
+    id: 'aura', label: 'Soft Light', hint: 'Light held in frosted glass', group: 'atmosphere', sessionSafe: true,
+    swatch: 'radial-gradient(circle at 45% 40%,#fff6e6,#e9c9d6 45%,#8fa3d8)',
+    gen: { ...NONE, aura: 1, matte: 1 },
+    physics: { rippleK: 8, rippleSpeed: 0.3, rippleDecay: 1.6, rippleAmp: 0.008, jelly: 0.1, fluid: 0 },
     sound: {
       bed: [
-        { kind: 'noise', color: 'pink', filter: { type: 'lowpass', freq: 700, q: 0.4 }, gain: 0.16, lfo: { target: 'freq', rate: 0.045, depth: 420 } },
-        { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 240 }, gain: 0.08 },
+        { kind: 'tones', wave: 'sine', freqs: [130.81, 196, 261.9], levels: [1, 0.6, 0.25], filter: { type: 'lowpass', freq: 520 }, gain: 0.03, swell: { rate: 0.03, depth: 0.35 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'lowpass', freq: 420, q: 0.4 }, gain: 0.02, lfo: { target: 'gain', rate: 0.05, depth: 0.01 } },
       ],
-      event: { voice: 'swell', color: 'pink', dur: [1.4, 2.6], sweep: [260, 1300, 280], amp: 0.12 },
-      rate: 0.1,
+      event: { voice: 'swell', color: 'pink', dur: [1.6, 2.8], sweep: [200, 620, 190], amp: 0.04 },
+      rate: 0.06,
     },
   },
   {

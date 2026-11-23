@@ -1,6 +1,6 @@
 export type MaterialId =
-  | 'default' | 'glass' | 'jelly' | 'dust' | 'fog' | 'water' | 'powder'
-  | 'ice' | 'prism'
+  | 'default' | 'glass' | 'jelly' | 'dust' | 'aura' | 'water' | 'powder'
+  | 'ice'
   | 'flower' | 'mushroom' | 'root' | 'medusa' | 'pillow';
 export type PatternId = 'opcell' | 'moire' | 'cymatic' | 'ganzfeld';
 export type ArtistId = 'default' | 'turrell' | 'janssens' | 'cruzdiez' | 'eliasson' | 'pashgian' | 'corse';
@@ -15,8 +15,8 @@ export type AppMode = 'session' | 'play';
 export type VideoKind = 'desktop' | 'phone';
 
 export const MATERIAL_ORDER: MaterialId[] = [
-  'default', 'glass', 'jelly', 'dust', 'fog', 'water', 'powder',
-  'ice', 'prism',
+  'default', 'glass', 'jelly', 'dust', 'aura', 'water', 'powder',
+  'ice',
   'flower', 'mushroom', 'root', 'medusa', 'pillow',
 ];
 export const PATTERN_ORDER: PatternId[] = ['opcell', 'moire', 'cymatic', 'ganzfeld'];
@@ -69,8 +69,6 @@ export interface MixLevels {
   waves: number;
   forest: number; // CC0 field recording (see CREDITS.md)
   birdsong: number; // CC0 field recording (see CREDITS.md)
-  fire: number; // crackling fire (synthesised)
-  night: number; // forest at night: crickets, leaves, a distant owl (synthesised)
   tone40: number; // pure 40 Hz tone
   tone136: number; // pure 136.1 Hz tone
   binaural: number; // 6 Hz difference between ears (headphones)

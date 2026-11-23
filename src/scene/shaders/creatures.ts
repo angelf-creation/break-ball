@@ -14,6 +14,9 @@ uniform float uArtTint;   // an artist is chosen: grade toward that palette
 uniform float uBloom;
 uniform float uSession;
 uniform float uBreath;
+uniform float uReduced;
+uniform vec3 uSonic;     // sound: x energy, y low energy, z tone 0..1
+uniform float uSonicT;
 uniform vec2 uResolution;
 varying vec3 vWorld;
 varying vec3 vN;
@@ -24,6 +27,7 @@ vec3 graded(vec3 c){
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = mix(c, palette(0.1 + sqrt(max(l, 0.0)) * 0.9) * (l * 1.5 + 0.03), uArtTint * 0.55);
   c *= 1.0 + uSession * (uBreath - 0.5) * 0.18 + 0.25 * uAura.w;
+  c *= 1.0 + uSonic.x * (0.06 + 0.07 * sin(length(gl_FragCoord.xy / uResolution.y - vec2(uCenter.x * uAspect, uCenter.y)) / max(uOrbR, 0.01) * (9.0 + 8.0 * uSonic.z) - uSonicT));
   c += uBloom * 0.18 * vec3(1.0, 0.95, 0.85);
   if (!(c.r >= 0.0 && c.g >= 0.0 && c.b >= 0.0)) c = vec3(0.0);
   return min(c, vec3(10.0));
@@ -51,6 +55,10 @@ uniform sampler2D uRelief;
 uniform float uDepth;   // how far the relief stands out
 uniform vec2 uJelly;
 uniform vec4 uDent;
+uniform vec3 uSonic;
+uniform float uSonicT;
+uniform vec4 uPlace;    // companions: xyz offset, w size (main picture: 0,0,0,1)
+uniform vec2 uTurn;     // x: mirror (-1 / 1), y: roll
 varying vec3 vWorld;
 varying vec3 vN;
 varying vec2 vUv2;
@@ -94,6 +102,14 @@ vec3 place(vec2 uv){
     q.y += down * (0.012 * cos(t * 0.9 + p.x * 7.0) - uArmSway.y * 0.05 * down);
     q.z += down * 0.06 * cos(t * 0.6 - p.y * 3.6);
   }
+  if (uPlace.w < 0.99){
+    q.x *= uTurn.x;
+    float roll = uTurn.y + 0.08 * sin(t * 0.2 + uPlace.x * 7.0);
+    q.xy = mat2(cos(roll), sin(roll), -sin(roll), cos(roll)) * q.xy;
+    q = q * uPlace.w + uPlace.xyz + vec3(0.05 * sin(t * 0.13 + uPlace.y * 5.0), 0.06 * sin(t * 0.17 + uPlace.x * 4.0), 0.0);
+  }
+  // sound: slow concentric micro-waves, as on water in a bowl
+  if (uPlace.w > 0.99) q.z += uSonic.x * 0.022 * sin(rr * (11.0 + 9.0 * uSonic.z) - uSonicT) * smoothstep(0.02, 0.3, rr);
   return q;
 }
 void main(){
@@ -113,6 +129,8 @@ vec3 photoGrade(vec3 c){
   c = mix(c, palette(0.1 + sqrt(max(l, 0.0)) * 0.9) * (l * 1.5 + 0.02), uArtTint * 0.45);
   c *= 1.0 + uSession * (uBreath - 0.5) * 0.16 + 0.22 * uAura.w;
   c += c * uBloom * 0.4;
+  // sound: a soft inner shimmer, in rings
+  c *= 1.0 + uSonic.x * (0.06 + 0.07 * sin(length(gl_FragCoord.xy / uResolution.y - vec2(uCenter.x * uAspect, uCenter.y)) / max(uOrbR, 0.01) * (9.0 + 8.0 * uSonic.z) - uSonicT));
   if (!(c.r >= 0.0 && c.g >= 0.0 && c.b >= 0.0)) c = vec3(0.0);
   return min(c, vec3(4.0));
 }
@@ -126,8 +144,19 @@ uniform vec4 uCrop;     // photo uv = uCrop.xy + uv * uCrop.zw
 uniform float uScene;
 uniform float uReady;
 uniform float uOpen;
+uniform vec4 uPlace;
+uniform float uPiece;   // 1: a loose piece of lace, not a whole animal
 varying float vRad;
 varying vec3 vObjP;
+// turn a colour's hue while keeping how light it is
+vec3 hueTurn(vec3 c, float a){
+  const vec3 k = vec3(0.57735);
+  float ca = cos(a);
+  vec3 o = c * ca + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - ca);
+  o = max(o, 0.0);
+  float l0 = dot(c, vec3(0.2126, 0.7152, 0.0722)), l1 = dot(o, vec3(0.2126, 0.7152, 0.0722));
+  return o * clamp(l0 / max(l1, 1e-3), 0.4, 1.8);
+}
 float plum(vec2 uv){ vec3 c = texture2D(uPhoto, uv).rgb; return dot(c, vec3(0.3, 0.55, 0.15)); }
 void main(){
   vec2 uv = uCrop.xy + vUv2 * uCrop.zw;
@@ -149,11 +178,52 @@ void main(){
   col += c * sq(1.0 - ndv) * 0.5;
   vec3 H = normalize(L + V);
   col += (c + 0.02) * pow(clamp(dot(Nb, H), 0.0, 1.0), 26.0) * 0.3 * smoothstep(0.02, 0.2, l0);
+  float t = uTime * mix(1.0, 0.3, uReduced);
+  if (uScene < 0.5){
+    // orchid: a subtle shift of hue, passing outward from the heart
+    float w = sin(vRad * 2.6 - t * 0.28 + 0.6 * sin(atan(vObjP.y, vObjP.x) * 3.0));
+    col = mix(vec3(dot(col, vec3(0.2126, 0.7152, 0.0722))), hueTurn(col, 0.2 * w), 0.9);   // a natural flower: colour held back a little
+    // gentle light from inside: heart, veins and rims
+    col += c * (exp(-dot(vObjP.xy, vObjP.xy) * 9.0) * 0.35 + smoothstep(0.02, 0.12, length(g)) * 0.25) * (0.8 + 0.2 * sin(t * 0.5));
+  } else if (uScene < 1.5){
+    // mushroom: colour moving slowly up the gills and veins, from the foot to the rim
+    vec2 foot = vec2(0.02, -0.86);
+    vec2 dv = vObjP.xy - foot;
+    float along = length(dv), fan = atan(dv.x, dv.y);
+    float warp = 0.5 * snoise(vObjP.xy * 1.5 + vec2(0.0, -t * 0.03));
+    float ph = along * 2.3 - t * 0.2 + warp + 0.35 * sin(fan * 4.0 + t * 0.07);
+    // sea-green, blue, violet, rose and a little amber: soft neighbours, never a full rainbow at once
+    vec3 hueC = vec3(0.5) + vec3(0.42, 0.34, 0.4) * cos(6.2831853 * (vec3(ph * 0.22) + vec3(0.02, 0.36, 0.62)));
+    float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    float vein = smoothstep(0.015, 0.1, length(g)) * 0.6 + smoothstep(0.12, 0.5, l0) * 0.6;
+    vec3 dyed = hueC * (l / max(dot(hueC, vec3(0.2126, 0.7152, 0.0722)), 0.08));
+    // the tan stems and the orange rims keep their own warmth
+    float warm = smoothstep(0.0, 0.12, c.r - c.b);
+    float amt = (0.34 + 0.4 * clamp(vein, 0.0, 1.0)) * (1.0 - 0.75 * warm) * smoothstep(0.1, 0.5, along);
+    col = mix(col, dyed, amt);
+    // a slow glow travelling inside the veins
+    float run = sq(0.5 + 0.5 * sin(along * 7.0 - t * 0.75 + fan * 2.0 + warp * 3.0));
+    col += hueC * l * run * clamp(vein, 0.0, 1.0) * 0.55 * (1.0 - 0.6 * warm);
+  } else {
+    // medusa: clean black water; light gathers in the lace and the edge of the bell
+    col = max(col - 0.004, 0.0) * 1.04;
+    col += c * smoothstep(0.03, 0.16, length(g)) * 0.3 * (0.75 + 0.25 * sin(t * 0.6 + vObjP.y * 5.0));
+    col = hueTurn(col, 0.1 * sin(t * 0.21 + vObjP.y * 2.5));
+    if (uPiece > 0.5) col *= 0.75;
+    else if (uPlace.w < 0.99) col *= 0.3 + 0.5 * smoothstep(-0.5, 0.2, uPlace.z);   // further away, dimmer
+  }
   // a breath of its own light: only where the photograph already glows
   float lit = smoothstep(0.28, 0.75, l0);
   col += c * lit * (0.07 + 0.07 * sin(uTime * 0.5 + vUv2.x * 5.0 + vUv2.y * 4.0));
   // contained in the ball: falls quietly into the dark before the rim
-  float a = mask * (1.0 - smoothstep(0.9, 1.0, length(vObjP.xy) * 0.93)) ;
+  float a = mask * (1.0 - smoothstep(0.9, 1.0, length(vObjP.xy) * 0.93));
+  // where the photograph itself ends, let it go dark instead of showing a cut or a smear
+  if (uScene > 1.5){
+    if (uPiece > 0.5) a *= smoothstep(0.0, 0.3, vUv2.y) * (1.0 - smoothstep(0.65, 1.0, vUv2.y)) * smoothstep(0.0, 0.2, min(vUv2.x, 1.0 - vUv2.x));
+    vec2 eb = min(uv, 1.0 - uv);
+    a *= smoothstep(0.0, 0.07, min(eb.x, eb.y));
+    a *= smoothstep(0.02, 0.07, l0 + 0.4 * mask * smoothstep(0.1, 0.3, l0));
+  }
   if (uScene < 0.5){
     float o = uOpen * uOpen * (3.0 - 2.0 * uOpen);
     a *= 1.0 - smoothstep(o * 1.25, o * 1.25 + 0.22, vRad);
@@ -178,6 +248,145 @@ void main(){
   float k = clamp(abs(dot(normalize(vN), V)), 0.0, 1.0);
   vec3 c = uDen * (0.25 + 0.75 * sq(1.0 - k)) + vec3(0.0012);
   gl_FragColor = vec4(c, uW * smoothstep(0.0, 0.14, k));
+}`;
+// orchid: a slow, dreamy mandala made from the flower's own colours, far behind it and soft
+export const mandalaFrag = /* glsl */ `
+${COMMON}
+uniform sampler2D uPhoto;
+uniform float uReady;
+void main(){
+  vec2 p = vUv2 * 2.0 - 1.0;
+  float r = length(p);
+  if (r > 1.0) discard;
+  float t = uTime * mix(1.0, 0.25, uReduced);
+  vec3 c = vec3(0.0);
+  for (int k = 0; k < 2; k++){
+    float fk = float(k);
+    float a = atan(p.y, p.x) + t * (0.02 - 0.034 * fk) + 0.25 * sin(r * 3.0 - t * 0.15 + fk * 2.0);
+    float n = 8.0 + 4.0 * fk;
+    a = abs(mod(a, 6.2831853 / n) - 3.14159265 / n);              // folded like petals
+    float rr = fract(r * (0.75 - 0.2 * fk) - t * 0.008 + 0.15 * fk);
+    rr = abs(rr * 2.0 - 1.0);
+    vec2 q = rr * 0.46 * vec2(cos(a * 2.2 + fk * 1.8 + 0.3), sin(a * 2.2 + fk * 1.8 + 0.3));
+    // five soft taps: colour without any of the photograph's pixels showing
+    vec3 s5 = texture2D(uPhoto, 0.5 + q, 4.0).rgb;
+    for (int j = 0; j < 4; j++){ float ja = float(j) * 1.5708 + 0.6; s5 += texture2D(uPhoto, 0.5 + q + 0.035 * vec2(cos(ja), sin(ja)), 4.0).rgb; }
+    c += s5 * 0.2 * (0.6 - 0.2 * fk);
+  }
+  float ring = smoothstep(0.3, 0.72, r) * (1.0 - smoothstep(0.66, 0.97, r + 0.035 * sin(atan(p.y, p.x) * 12.0 + t * 0.15)));
+  // threads of light, like the filaments of a passion flower
+  float an = atan(p.y, p.x);
+  float th = pow(0.5 + 0.5 * cos(an * 44.0 + 2.0 * sin(r * 6.0 - t * 0.2)), 14.0) * (1.0 - smoothstep(0.5, 1.0, fwidth(an * 44.0)));
+  c += (c + vec3(0.03, 0.02, 0.05)) * th * 0.8;
+  c *= ring * (0.75 + 0.25 * sin(t * 0.33 + r * 5.0));
+  gl_FragColor = vec4(min(c * 0.95, vec3(1.0)), uW * uReady);
+}`;
+// fireflies, plankton, water droplets: points of light wandering inside the ball
+export const moteVert = /* glsl */ `
+float sq_(float x){ return x * x; }
+attribute vec4 aM;            // three randoms + size
+uniform float uTime;
+uniform float uPixelRatio;
+uniform float uKindM;         // 0 firefly, 1 plankton, 2 droplet
+uniform float uDisperse;
+uniform vec3 uPoke;
+uniform float uReduced;
+varying float vA;
+varying float vS;
+void main(){
+  float t = uTime * mix(1.0, 0.3, uReduced);
+  vec3 p = position;
+  if (uKindM < 0.5){
+    p += 0.22 * vec3(sin(t * (0.13 + 0.1 * aM.x) + aM.y * 40.0), sin(t * (0.11 + 0.1 * aM.y) + aM.z * 40.0), cos(t * (0.12 + 0.09 * aM.z) + aM.x * 40.0));
+  } else if (uKindM < 1.5){
+    p += 0.06 * vec3(sin(t * 0.2 + aM.x * 40.0), sin(t * 0.16 + aM.y * 40.0), cos(t * 0.18 + aM.z * 40.0));
+    p.y += 0.04 * sin(t * 0.3 + p.x * 4.0);
+  } else {
+    float cyc = fract(aM.x + t * (0.012 + 0.014 * aM.y));
+    p.y = mix(-0.85, 0.85, cyc);
+    p.xz += 0.03 * vec2(sin(t * 0.7 + aM.z * 30.0 + cyc * 9.0), cos(t * 0.6 + aM.x * 30.0));
+  }
+  vec3 dq = p - uPoke * 0.8;
+  p += normalize(dq + 1e-4) * uDisperse * 0.2 * exp(-dot(dq, dq) * 5.0);
+  float l = length(p);
+  float lim = uKindM < 0.5 ? 1.12 : 0.93;
+  if (l > lim) p *= lim / l;
+  float glow = uKindM < 0.5 ? 0.12 + 0.88 * smoothstep(0.1, 0.9, sin(t * (0.45 + 0.4 * aM.z) + aM.x * 60.0) * 0.5 + 0.5)
+             : uKindM < 1.5 ? 0.35 + 0.65 * sq_(0.5 + 0.5 * sin(t * (0.4 + aM.y) + aM.z * 50.0)) : 1.0;
+  vA = glow * (uKindM > 1.5 ? smoothstep(0.0, 0.12, 0.85 - abs(p.y)) : 1.0);
+  vS = aM.x;
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
+  gl_Position = projectionMatrix * mv;
+  gl_PointSize = aM.w * uPixelRatio * (9.5 / -mv.z);
+}`;
+export const moteFrag = /* glsl */ `
+uniform float uW;
+uniform float uKindM;
+varying float vA;
+varying float vS;
+void main(){
+  vec2 c = gl_PointCoord * 2.0 - 1.0; c.y = -c.y;
+  float d = length(c);
+  if (d > 1.0) discard;
+  if (uKindM < 0.5){
+    float a = exp(-d * d * 60.0) * 1.2 + exp(-d * d * 7.0) * 0.28;
+    vec3 col = mix(vec3(1.0, 0.78, 0.3), vec3(0.8, 1.0, 0.45), vS);
+    gl_FragColor = vec4(col, a * vA * uW * (1.0 - smoothstep(0.8, 1.0, d)));
+  } else if (uKindM < 1.5){
+    float a = exp(-d * d * 9.0);
+    vec3 col = mix(vec3(0.3, 0.75, 1.0), vec3(0.75, 0.6, 1.0), vS);
+    gl_FragColor = vec4(col, a * vA * uW * 0.8);
+  } else {
+    // a droplet: clear, a bright crescent on one side and a pinpoint highlight
+    float rim = smoothstep(0.62, 0.9, d) * (1.0 - smoothstep(0.92, 1.0, d));
+    float cres = rim * (0.35 + 0.65 * smoothstep(-0.4, 0.8, dot(c / max(d, 1e-3), vec2(-0.6, 0.8))));
+    float hi = exp(-dot(c - vec2(-0.3, 0.4), c - vec2(-0.3, 0.4)) * 40.0);
+    float low = exp(-dot(c - vec2(0.3, -0.45), c - vec2(0.3, -0.45)) * 9.0) * 0.25;
+    gl_FragColor = vec4(vec3(0.6, 0.72, 1.0), (cres * 0.5 + hi + low) * vA * uW * 0.75);
+  }
+}`;
+// star dust: tens of thousands of grains, placed and coloured by the galaxy photograph
+export const dustVert = /* glsl */ `
+attribute vec3 aCol;
+attribute vec2 aR;
+uniform float uTime;
+uniform float uPixelRatio;
+uniform float uDisperse;
+uniform vec3 uPoke;
+uniform float uReduced;
+varying vec3 vC;
+varying float vA;
+void main(){
+  float t = uTime * mix(1.0, 0.3, uReduced);
+  // the whole sky wheels as one, 0.02 rad/s as in the recording
+  float a = t * 0.02;
+  float c = cos(a), s = sin(a);
+  vec3 p = position;
+  p.xy = mat2(c, -s, s, c) * p.xy;
+  // each grain hangs loose and drifts a hair, like powder in still air
+  p += 0.006 * vec3(sin(t * 0.21 + aR.x * 90.0), sin(t * 0.17 + aR.y * 90.0), cos(t * 0.19 + aR.x * 50.0));
+  vec3 dq = p - uPoke * 0.75;
+  p += (normalize(dq + 1e-4) * 0.5 + 0.2 * vec3(sin(aR.x * 80.0), cos(aR.y * 80.0), sin(aR.y * 50.0))) * uDisperse * exp(-dot(dq, dq) * 7.0) * 0.6;
+  float l = length(p);
+  if (l > 0.965) p *= 0.965 / l;
+  // glitter: now and then a grain turns and catches the light
+  float g = pow(max(sin(t * (0.3 + aR.x * 0.9) + aR.y * 300.0), 0.0), 40.0);
+  float big = smoothstep(0.985, 1.0, aR.x);
+  vC = aCol * (0.75 + 0.35 * sin(t * 0.5 + aR.y * 70.0)) + vec3(0.9, 0.95, 1.0) * g * 0.8 + vec3(0.5) * big;
+  vA = (0.5 + 0.5 * g) * smoothstep(0.0, 0.16, 1.0 - l);
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
+  gl_Position = projectionMatrix * mv;
+  gl_PointSize = max((0.6 + 0.6 * aR.x * aR.x + 1.3 * g * aR.y + 1.3 * big) * uPixelRatio * (9.5 / -mv.z), 1.0);
+}`;
+export const dustFrag = /* glsl */ `
+uniform float uW;
+uniform float uReady;
+varying vec3 vC;
+varying float vA;
+void main(){
+  float d = length(gl_PointCoord - 0.5);
+  float a = (1.0 - smoothstep(0.18, 0.5, d)) * vA;
+  gl_FragColor = vec4(min(vC, vec3(2.0)), a * uW * uReady);
 }`;
 // its thin glass: a soft window, a faint curved rim; light only, nothing is hidden by it
 export const shellFrag = /* glsl */ `
@@ -288,20 +497,21 @@ void main(){
   vec2 dq2 = q2 - uPoke.xy * 0.8;
   q2 -= normalize(dq2 + 1e-4) * uDisperse * 0.1 * exp(-dot(dq2, dq2) * 6.0);
   float ca = cos(t), sa = sin(t);
-  // the heart turns a little ahead of the rim
-  float wind = 0.06 * sin(uTime * 0.07) * exp(-dot(q2, q2) * 3.0);
-  ca = cos(t + wind); sa = sin(t + wind);
   // spherized: swollen in the middle, drawn away round the sides, the arms curling with it
   float g2 = dot(q2, q2);
-  float gc = 0.22 * g2 * (1.0 + 0.4 * sin(uTime * 0.11));
+  float gc = 0.22 * g2;
   vec2 gq = mat2(ca, -sa, sa, ca) * mat2(cos(gc), -sin(gc), sin(gc), cos(gc)) * q2 * (0.74 + 0.28 * g2);
   vec2 guv = vec2(0.478, 0.512) + gq * vec2(0.305, 0.489);
   vec3 ph = texture2D(uPhoto, guv).rgb * uReady;
   float inside = 1.0 - smoothstep(0.86, 1.0, length(q2));
   ph = ph / (1.0 + 0.55 * ph);                       // hold detail in the bright heart
-  vec3 col = vec3(0.0005, 0.0008, 0.0016) + ph * inside * 1.05;
+  // only a dim ground: the body of the galaxy is the dust itself (dustVert)
+  // broken into powder so nothing reads as a smooth, jelly-like glow
+  vec3 gp = vec3(guv * vec2(900.0, 560.0), 1.0);
+  float powder = 0.25 + 1.1 * sq(vn(gp)) + 0.5 * step(0.8, vn(gp * 2.1));
+  vec3 col = vec3(0.0005, 0.0008, 0.0016) + ph * inside * powder * 0.5;
+  col += vec3(1.0, 0.86, 0.68) * (exp(-g2 * 26.0) * 0.5 + exp(-g2 * 7.0) * 0.07) * uReady;   // the warm heart, behind the dust
   float pl = dot(ph, vec3(0.333));
-  col += ph * smoothstep(0.1, 0.5, pl) * 0.1 * sin(uTime * 0.4 + q2.x * 6.0) * inside;
   // crisp stars behind and in front, so it has depth as it tilts
   col += (starLayer(d1, 20.0, 0.3, 0.085) * 1.5 + starLayer(d1 + 7.1, 58.0, 0.3, 0.12) * 0.7) * (1.0 - smoothstep(0.05, 0.3, pl)) * (0.45 + 0.55 * (1.0 - inside));
   col += starLayer(d2 * 0.8 + 11.0, 30.0, 0.16, 0.085) * 1.2 + starLayer(d2 * 0.7 + 17.0, 22.0, 0.08, 0.06) * 1.6;

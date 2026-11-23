@@ -48,43 +48,7 @@ float fbm(vec2 p){
  * Orb surface: a unit-direction sphere displaced along its normal.
  * `dir` is always a unit vector in object space; +z faces the camera.
  */
-/** Rough-cut gem planes, shared by the shape (vertex), colour and backdrop. */
-export const GEM = /* glsl */ `
-// Rough-cut gem (prism): the convex polyhedron cut by these planes (normal, distance).
-// Flattened: the table and base sit closer than the sides.
-vec4 gemPlane(int i){
-  if (i == 0) return vec4(0.0, 1.0, 0.0, 0.78);
-  if (i == 1) return vec4(0.0, -1.0, 0.0, 0.86);
-  if (i == 2) return vec4(0.9, 0.3, 0.2, 0.93);
-  if (i == 3) return vec4(-0.85, 0.35, 0.3, 0.9);
-  if (i == 4) return vec4(0.2, 0.35, 0.95, 0.93);
-  if (i == 5) return vec4(-0.3, 0.3, -0.9, 0.91);
-  if (i == 6) return vec4(0.7, -0.5, 0.5, 0.9);
-  if (i == 7) return vec4(-0.6, -0.55, 0.55, 0.92);
-  if (i == 8) return vec4(0.5, -0.45, -0.75, 0.9);
-  if (i == 9) return vec4(-0.65, -0.4, -0.6, 0.93);
-  if (i == 10) return vec4(0.55, 0.75, -0.35, 0.9);
-  if (i == 11) return vec4(-0.4, 0.8, 0.45, 0.91);
-  if (i == 12) return vec4(0.95, -0.1, -0.3, 0.92);
-  return vec4(-0.95, -0.05, -0.2, 0.95);
-}
-// x: radius of the gem along dir; y: gap to the next-nearest face (small = near an edge)
-vec2 gemRadius(vec3 dir){
-  float r1 = 1.4, r2 = 1.4;
-  for (int i = 0; i < 14; i++){
-    vec4 pl = gemPlane(i);
-    float c = dot(dir, normalize(pl.xyz));
-    if (c > 0.05){
-      float r = pl.w / c;
-      if (r < r1){ r2 = r1; r1 = r; } else if (r < r2){ r2 = r; }
-    }
-  }
-  return vec2(min(r1, 1.35), r2 - r1);
-}
-`;
-
 export const SURFACE = /* glsl */ `
-${GEM}
 uniform float uTime;
 uniform float uClock;
 uniform float uRadius;
@@ -101,7 +65,9 @@ uniform float uAperFlat; // Turrell window
 uniform float uRings;    // Cruz-Diez latitude ridges
 uniform float uRingFreq;
 uniform float uSquash;     // marshmallow: puffed and flattened top and bottom
-uniform float uGem;        // prism: rough-cut polyhedron
+uniform vec3 uSonic;       // sound: x energy, y low energy, z tone 0..1
+uniform float uSonicT;     // its own slow clock
+uniform float uSonicAmt;   // how readily this material answers
 uniform vec4 uDent;        // pillow: xyz = where it is pressed, w = how deep
 
 // Turrell's window: everything within this angle of the viewer is cut flat.
@@ -169,9 +135,16 @@ float orbRipples(vec3 dir){
 float orbDisp(vec3 dir){
   float h = orbForm(dir) + orbRipples(dir);
   if (uSquash > 0.002) h += uSquash * (cushionShape(dir) + dentShape(dir));
-  if (uGem > 0.002) h += uGem * (gemRadius(dir).x - 1.0);
   // jelly: spring offset pushes one side in and squashes the other axis
   h += (dot(dir.xy, uJelly) * 0.5 + length(uJelly) * 0.35 * (dir.z * dir.z - 0.33)) * uJellyAmt;
+  // sound: gentle standing waves after Chladni / singing bowls: rings from the front, crossed by
+  // a few spokes when a pure tone is playing. Small and slow, never a spike.
+  if (uSonicAmt > 0.002 && uSonic.x > 0.002){
+    float th = acos(clamp(dir.z, -1.0, 1.0)), az = atan(dir.y, dir.x);
+    float w1 = sin(th * (12.0 + 12.0 * uSonic.z) - uSonicT);
+    float w2 = cos(az * 6.0) * sin(th * 9.0) * sin(uSonicT * 0.6);
+    h += uSonicAmt * uSonic.x * 0.0065 * (mix(w1, w1 * 0.6 + w2, uSonic.z)) * smoothstep(0.05, 0.4, th);
+  }
   // water: slow large-scale sloshing
   // slow, large, smooth swells (liquid chrome moves slowly and stays a ball)
   h += uFluid * 0.028 * snoise(vec2(dir.x + dir.z * 0.7, dir.y) * 1.1 + vec2(uTime * 0.035, -uTime * 0.025));
@@ -302,8 +275,7 @@ vec3 fieldColor(vec2 uv){
 
 /**
  * Dispersion: light split into its components. Built for Mary Corse's
- * retroreflective microspheres (each glass bead is a tiny prism); the tier-2
- * Prism material reuses spectral() and beadSparkle() rather than writing its own.
+ * retroreflective microspheres (each glass bead is a tiny prism).
  * Needs NOISE (hash12).
  */
 export const DISPERSION = /* glsl */ `

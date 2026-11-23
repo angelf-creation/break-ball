@@ -95,7 +95,7 @@ function DesktopHUD() {
       </div>
       {/* sound panel: shown or hidden */}
       <div
-        className={`${glass} absolute top-[68px] right-6 z-30 w-[320px] max-h-[calc(100vh-96px)] overflow-y-auto no-scrollbar rounded-panel px-7 py-6 transition-all duration-500 ${
+        className={`${glass} absolute top-[76px] right-[296px] z-30 w-[320px] max-h-[calc(100vh-96px)] overflow-y-auto no-scrollbar rounded-panel px-7 py-6 transition-all duration-500 ${
           mixerOpen ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'
         }`}
         aria-hidden={!mixerOpen}
@@ -103,7 +103,7 @@ function DesktopHUD() {
         <SoundPanel />
       </div>
       {calendarOpen && (
-        <div className={`${glass} absolute top-[68px] right-6 z-30 w-[380px] max-h-[calc(100vh-96px)] overflow-y-auto no-scrollbar rounded-panel px-7 py-6`}>
+        <div className={`${glass} absolute top-[76px] right-[296px] z-30 w-[380px] max-h-[calc(100vh-96px)] overflow-y-auto no-scrollbar rounded-panel px-7 py-6`}>
           <CalendarCard />
         </div>
       )}
@@ -122,14 +122,20 @@ function DesktopHUD() {
         </Panel>
       </Dimmable>
 
-      {/* two separate panels: artists, and sessions */}
-      <Dimmable className="absolute right-6 top-[calc(50%+24px)] -translate-y-1/2 z-20 w-[256px]">
-        <div className="flex flex-col gap-3 max-h-[calc(100vh-112px)] overflow-y-auto no-scrollbar">
-          <Panel className="px-5 py-5 shrink-0">
-            <Label className="px-1 mb-3">Artist · History</Label>
-            <ArtistPicker />
+      {/* two separate panels: artists, and sessions. Pinned between the top bar and the bottom
+          edge, so on a short window it scrolls instead of being pushed out of sight; the Sound
+          and Calendar panels open beside it, never over it. */}
+      <Dimmable level="soft" className="absolute right-6 top-[76px] bottom-6 z-20 w-[256px] overflow-y-auto no-scrollbar !pointer-events-none">
+        <div className="pointer-events-none flex min-h-full flex-col justify-center gap-3 [&>*]:pointer-events-auto">
+          <Panel className="px-5 py-5 shrink-0 [@media(max-height:800px)]:!py-4">
+            <section aria-labelledby="artist-heading">
+              <h2 id="artist-heading" className="mb-3 px-1 font-display text-[25px] leading-none text-white">
+                Artist
+              </h2>
+              <ArtistPicker />
+            </section>
           </Panel>
-          <Panel className="px-6 py-6 shrink-0">
+          <Panel className="px-6 py-6 shrink-0 [@media(max-height:800px)]:!py-4">
             <Sessions />
           </Panel>
         </div>

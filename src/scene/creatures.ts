@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { photoVert, photoFrag, denFrag, shellFrag, plainVert, ballVert, spaceFrag, iceFrag } from './shaders/creatures';
+import { photoVert, photoFrag, denFrag, mandalaFrag, shellFrag, plainVert, moteVert, moteFrag, dustVert, dustFrag, ballVert, spaceFrag, iceFrag } from './shaders/creatures';
 import { makeRelief, type Swell } from './photoRelief';
 
 /**
@@ -43,6 +43,19 @@ export class Creature {
   private owned: { dispose(): void }[] = [];
   own(d: { dispose(): void }) {
     this.owned.push(d);
+  }
+  addPoints(geo: THREE.BufferGeometry, vert: string, frag: string, order: number, extra: Uniforms = {}, opts: Partial<THREE.ShaderMaterialParameters> = {}) {
+    const m = new THREE.ShaderMaterial({
+      vertexShader: vert, fragmentShader: frag, uniforms: { ...this.shared, uW: this.w, ...extra },
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, ...opts,
+    });
+    const pts = new THREE.Points(geo, m);
+    pts.renderOrder = order;
+    pts.frustumCulled = false;
+    this.mats.push(m);
+    this.geos.push(geo);
+    this.group.add(pts);
+    return pts;
   }
   setWeight(w: number, dt = 0.016) {
     if (this.ready && this.photoLoaded) this.ready.value += (1 - this.ready.value) * (1 - Math.exp(-dt * 2.5));
@@ -92,7 +105,7 @@ interface PhotoSpec {
 }
 const PHOTOS: Record<'petal' | 'gill' | 'emit', PhotoSpec> = {
   petal: {
-    file: 'orchid.jpg', scene: 0, crop: [-0.03, -0.04, 1.06, 1.06], depth: 0.62, den: [0.012, 0.01, 0.018],
+    file: 'orchid.jpg', scene: 0, crop: [-0.03, -0.04, 1.06, 1.06], depth: 0.62, den: [0.008, 0.006, 0.014],
     swells: [
       { x: 0, y: -0.12, rx: 0.3, ry: 0.3, h: 0.3 }, { x: 0, y: 0.1, rx: 0.1, ry: 0.1, h: 0.16 }, // heart and column
       { x: 0, y: -0.6, rx: 0.42, ry: 0.3, h: 0.22 }, // the lip
@@ -110,7 +123,7 @@ const PHOTOS: Record<'petal' | 'gill' | 'emit', PhotoSpec> = {
     ],
   },
   emit: {
-    file: 'medusa.jpg', scene: 2, crop: [-0.09, -0.07, 1.14, 1.0826], depth: 0.62, den: [0.006, 0.005, 0.02], solid: 0.05,
+    file: 'medusa.jpg', scene: 2, crop: [-0.09, -0.07, 1.14, 1.0826], depth: 0.62, den: [0.0, 0.0, 0.0005], solid: 0.05,
     swells: [
       { x: -0.32, y: 0.62, rx: 0.45, ry: 0.28, h: 0.26 }, // the bell
       { x: 0.02, y: -0.2, rx: 0.3, ry: 0.4, h: 0.2 }, { x: 0.35, y: -0.6, rx: 0.2, ry: 0.35, h: 0.12 }, // the lace arms
@@ -136,6 +149,20 @@ function glassBall(c: Creature, den: [number, number, number]) {
   c.add(g, plainVert, shellFrag, 12, U, { side: THREE.FrontSide, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
 }
 
+/** n points scattered through a ball of the given radius (flattened by sz), with random attributes. */
+function motes(c: Creature, kind: number, n: number, size: [number, number], radius: number) {
+  const pos = new Float32Array(n * 3), m = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const y = Math.random() * 2 - 1, a = Math.random() * Math.PI * 2, r = radius * Math.cbrt(Math.random()), q = Math.sqrt(1 - y * y);
+    pos.set([Math.cos(a) * q * r, y * r, Math.sin(a) * q * r], i * 3);
+    m.set([Math.random(), Math.random(), Math.random(), size[0] + (size[1] - size[0]) * Math.random() ** 2], i * 4);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('aM', new THREE.BufferAttribute(m, 4));
+  c.addPoints(g, moteVert, moteFrag, 9, { uKindM: { value: kind } }, { depthTest: kind !== 0 }); // fireflies also pass in front of the flower
+}
+
 function photoOrb(U: Uniforms, key: 'petal' | 'gill' | 'emit', compact: boolean): Creature {
   const spec = PHOTOS[key];
   const c = new Creature(U);
@@ -146,22 +173,95 @@ function photoOrb(U: Uniforms, key: 'petal' | 'gill' | 'emit', compact: boolean)
   const extra: Uniforms = {
     uPhoto: { value: null }, uRelief: { value: null }, uScene: { value: spec.scene }, uDepth: { value: spec.depth }, uReady: ready,
     uCrop: { value: new THREE.Vector4(cx, 1 - cy - ch, cw, ch) },
+    uPlace: { value: new THREE.Vector4(0, 0, 0, 1) }, uTurn: { value: new THREE.Vector2(1, 0) }, uPiece: { value: 0 },
   };
-  const mesh = c.add(grid(n, n), photoVert, photoFrag, 6, extra, { side: THREE.DoubleSide, depthWrite: true });
-  mesh.visible = false;
+  const pieces: { crop: [number, number, number, number]; relief: { value: unknown } }[] = [];
+  const meshes: THREE.Mesh[] = [];
+  if (key === 'petal') {
+    const g = grid(1, 1, (u, v) => [(u * 2 - 1) * 1.16, (v * 2 - 1) * 1.16, -0.2]);
+    meshes.push(c.add(g, plainVert, mandalaFrag, 4, { uPhoto: extra.uPhoto, uReady: ready }, { depthWrite: false, blending: THREE.AdditiveBlending }));
+    motes(c, 0, compact ? 26 : 40, [12, 30], 1.1);
+  }
+  if (key === 'emit') {
+    // smaller jellyfish further off in the water, behind the main one
+    const far: [number, number, number, number, number, number][] = [
+      [0.56, -0.28, -0.35, 0.3, -1, 0.25], [-0.62, -0.36, -0.3, 0.26, 1, -0.2], [-0.3, -0.66, -0.15, 0.17, -1, 0.1], [0.5, 0.6, -0.4, 0.15, 1, 0.35],
+    ];
+    const small = grid(60, 60);
+    for (const [x, y, z, k, mir, roll] of far)
+      meshes.push(c.add(small, photoVert, photoFrag, 5, { ...extra, uPlace: { value: new THREE.Vector4(x, y, z, k) }, uTurn: { value: new THREE.Vector2(mir, roll) } }, { depthWrite: false }));
+    // more frills: loose lengths of the same lace, drifting behind and beside the arms
+    const lace: [number, number, number, number, number, number][] = [
+      [-0.34, -0.36, -0.05, 0.42, -1, 0.5], [0.44, -0.2, -0.12, 0.36, 1, -0.35], [0.12, -0.62, 0.0, 0.34, -1, -0.1],
+    ];
+    const crop: [number, number, number, number] = [0.22, 0.42, 0.56, 0.532];
+    const relief = { value: null as unknown };
+    pieces.push({ crop, relief });
+    for (const [x, y, z, k, mir, roll] of lace)
+      meshes.push(c.add(small, photoVert, photoFrag, 5, {
+        ...extra, uRelief: relief, uCrop: { value: new THREE.Vector4(crop[0], 1 - crop[1] - crop[3], crop[2], crop[3]) }, uPiece: { value: 1 },
+        uPlace: { value: new THREE.Vector4(x, y, z, k) }, uTurn: { value: new THREE.Vector2(mir, roll) },
+      }, { depthWrite: false }));
+    motes(c, 1, compact ? 150 : 300, [3, 9], 0.92);
+    motes(c, 2, compact ? 16 : 26, [4, 15], 0.75);
+  }
+  meshes.push(c.add(grid(n, n), photoVert, photoFrag, 6, extra, { side: THREE.DoubleSide, depthWrite: true }));
+  meshes.forEach((m) => (m.visible = false));
   loadPhoto(spec.file, (t, img) => {
     extra.uPhoto.value = t;
     extra.uRelief.value = makeRelief(img, spec.crop, spec.swells, spec.solid ?? 0);
     c.own(t);
     c.own(extra.uRelief.value as THREE.Texture);
-    mesh.visible = true;
+    for (const p of pieces) {
+      const rt = makeRelief(img, p.crop, [], 0.05);
+      p.relief.value = rt;
+      c.own(rt);
+    }
+    meshes.forEach((m) => (m.visible = true));
     c.photoLoaded = true;
   });
   return c;
 }
 
+/** Grains placed where the photograph is bright, in its own colours, with real thickness. */
+function starDust(c: Creature, img: HTMLImageElement, compact: boolean, ready: { value: number }) {
+  const W = 512, H = Math.round((W * img.height) / img.width);
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const g2 = cv.getContext('2d', { willReadFrequently: true })!;
+  g2.drawImage(img, 0, 0, W, H);
+  const d = g2.getImageData(0, 0, W, H).data;
+  const lin = (v: number) => (v / 255) ** 2.2;
+  const N = compact ? 14000 : 34000;
+  const pos: number[] = [], col: number[] = [], rnd: number[] = [];
+  for (let tries = 0; pos.length < N * 3 && tries < N * 60; tries++) {
+    const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 0.97;
+    const x = Math.cos(a) * r, y = Math.sin(a) * r;
+    // the same mapping the shader uses: swollen in the middle, curling toward the rim
+    const r2 = r * r, gc = 0.22 * r2, k = 0.74 + 0.28 * r2;
+    const gx = (Math.cos(gc) * x - Math.sin(gc) * y) * k, gy = (Math.sin(gc) * x + Math.cos(gc) * y) * k;
+    const px = Math.floor((0.478 + gx * 0.305) * W), py = Math.floor((1 - (0.512 + gy * 0.489)) * H);
+    if (px < 0 || py < 0 || px >= W || py >= H) continue;
+    const o = (py * W + px) * 4;
+    const cr = lin(d[o]), cg = lin(d[o + 1]), cb = lin(d[o + 2]);
+    const l = 0.3 * cr + 0.55 * cg + 0.15 * cb;
+    if (Math.random() > 0.035 + Math.min(1, l * 2.2)) continue;
+    const z = 0.3 * Math.exp(-r2 * 5) - 0.12 * r2 + (Math.random() - 0.5) * (Math.random() < 0.12 ? 0.9 : 0.16) * (1.1 - r);
+    pos.push(x, y, z);
+    const gain = Math.min(3, 0.5 / Math.max(l, 0.12));
+    col.push(cr * gain + 0.02, cg * gain + 0.02, cb * gain + 0.03);
+    rnd.push(Math.random(), Math.random());
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('aCol', new THREE.Float32BufferAttribute(col, 3));
+  g.setAttribute('aR', new THREE.Float32BufferAttribute(rnd, 2));
+  c.addPoints(g, dustVert, dustFrag, 8, { uReady: ready });
+}
+
 /** Space and ice: a plain ball; the shader casts each pixel's ray through it. */
-function ball(U: Uniforms, frag: string, photo?: string): Creature {
+function ball(U: Uniforms, frag: string, compact: boolean, photo?: string): Creature {
   const c = new Creature(U);
   // ice: the blocks the cracks run between (shaders/creatures.ts, CELLS)
   let seed = 23;
@@ -175,7 +275,8 @@ function ball(U: Uniforms, frag: string, photo?: string): Creature {
   const ready = c.waitForPhoto();
   const extra: Uniforms = { uPhoto: { value: null }, uReady: ready };
   if (photo)
-    loadPhoto(photo, (t) => {
+    loadPhoto(photo, (t, img) => {
+      starDust(c, img, compact, ready);
       t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
       extra.uPhoto.value = t;
       c.own(t);
@@ -190,7 +291,7 @@ export function buildCreature(key: CreatureKey, U: Uniforms, compact: boolean): 
     case 'petal':
     case 'gill':
     case 'emit': return photoOrb(U, key, compact);
-    case 'nebula': return ball(U, spaceFrag, 'space.jpg');
-    case 'crack': return ball(U, iceFrag);
+    case 'nebula': return ball(U, spaceFrag, compact, 'space.jpg');
+    case 'crack': return ball(U, iceFrag, compact);
   }
 }

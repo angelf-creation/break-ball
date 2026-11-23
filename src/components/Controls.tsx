@@ -169,6 +169,7 @@ export function ArtistPicker({ variant = 'row' }: { variant?: Variant }) {
           swatch={ARTIST_SWATCH(a.id)}
           hint={a.inOrb}
           display
+          className={variant === 'row' ? '[@media(max-height:800px)]:!py-1.5' : ''}
           onClick={() => store.set({ artist: a.id, historyOpen: true })}
         >
           {a.label}

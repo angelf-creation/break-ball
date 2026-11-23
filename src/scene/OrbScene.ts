@@ -10,6 +10,7 @@ import { ARTIST_BY_ID, type ArtistForm } from '../data/artists';
 import { MATERIAL_BY_ID, GEN_KEYS, NONE, type GeneratorMix } from '../data/materials';
 import { effectiveDate, lightMood } from '../time/ceTime';
 import { breathAt, sessionElapsed } from '../time/breath';
+import { soundLevel } from '../audio/level';
 import { VideoSource, VIDEO_DISC } from './videoSource';
 import { makeRootTexture } from './growth';
 import { buildCreature, CREATURE_KEYS, type Creature, type CreatureKey } from './creatures';
@@ -31,13 +32,6 @@ const FOG_LAYERS = [-1.2, -0.75, -0.38, 0, 0.38, 0.75, 1.2];
 const FOG_EXTENT = 1.85; // haze reaches this far (radius units) before it is gone
 /** how much the orb shrinks on an empty breath (session mode) */
 const BREATH_SCALE = 0.13;
-/** rough-cut gem planes [nx, ny, nz, distance]; keep in sync with gemPlane() in chunks.ts */
-const GEM_PLANES: [number, number, number, number][] = [
-  [0, 1, 0, 0.78], [0, -1, 0, 0.86], [0.9, 0.3, 0.2, 0.93], [-0.85, 0.35, 0.3, 0.9], [0.2, 0.35, 0.95, 0.93],
-  [-0.3, 0.3, -0.9, 0.91], [0.7, -0.5, 0.5, 0.9], [-0.6, -0.55, 0.55, 0.92], [0.5, -0.45, -0.75, 0.9],
-  [-0.65, -0.4, -0.6, 0.93], [0.55, 0.75, -0.35, 0.9], [-0.4, 0.8, 0.45, 0.91], [0.95, -0.1, -0.3, 0.92], [-0.95, -0.05, -0.2, 0.95],
-];
-
 export interface SceneOptions {
   /** called on click / drag with intensity 0..1 and stereo pan -1..1 */
   onTouch?: (intensity: number, pan: number) => void;
@@ -146,14 +140,16 @@ export class OrbScene {
     uCaustic: { value: 0 },
     uFilm: { value: 0 },
     uSoft: { value: 0 },
-    uSpectral: { value: 0 },
-    uGem: { value: 0 },
     uOpen: { value: 0 },
     uGroupRot: { value: new THREE.Matrix3() },
     uViewRot: { value: new THREE.Matrix3() },
     uInvModel: { value: new THREE.Matrix4() },
     uCreature: { value: 0 },
     uPrint: { value: 0 },
+    uAuraMat: { value: 0 },
+    uSonic: { value: new THREE.Vector3() },
+    uSonicT: { value: 0 },
+    uSonicAmt: { value: 1 },
     uArtTint: { value: 0 },
     uDent: { value: new THREE.Vector4(0, 0, 1, 0) },
     uAura: { value: new THREE.Vector4() },
@@ -212,7 +208,6 @@ export class OrbScene {
   private backU = {
     ...this.U,
     uFieldColor: { value: new THREE.Color() },
-    uSpectralAmt: { value: 0 },
   };
   private armSway = new THREE.Vector2();
   private pulseClock = 0;
@@ -235,7 +230,7 @@ export class OrbScene {
     const on = (v: number) => v > 0.0005;
     const flags: Record<string, boolean> = {
       G_REFRACT: on(g.refract), G_ABSORB: on(g.absorb), G_SOFT: on(g.soft), G_CAUSTIC: on(g.caustic),
-      G_ROOT: on(g.root), G_SSS: on(g.sss), G_GEM: on(g.gem),
+      G_AURA: on(g.aura), G_ROOT: on(g.root), G_SSS: on(g.sss),
       G_APERFLAT: on(f.aperFlat), G_HAZE: on(f.haze), G_PRISM: on(f.prism), G_RETRO: on(f.retro),
       G_STRIPES: on(f.stripes), G_DISC: on(f.disc) || on(f.mono), G_RESIN: on(f.resin),
     };
@@ -515,15 +510,6 @@ export class OrbScene {
       const fl = dir.z / (0.66 - 0.1 * cr * cr * (3 - 2 * cr));
       const an = Math.acos(Math.min(1, Math.max(-1, dir.x * U.uDent.value.x + dir.y * U.uDent.value.y + dir.z * U.uDent.value.z)));
       h += U.uSquash.value * (1.06 / Math.sqrt(Math.max(sq2 + fl * fl, 1e-3)) - 1 + U.uDent.value.w * (-0.2 * Math.exp((-an * an) / 0.12) + 0.05 * Math.exp(-((an - 0.68) ** 2) / 0.045)));
-    }
-    if (U.uGem.value > 0.002) {
-      // mirrors gemRadius(): the rough-cut polyhedron
-      let r1 = 1.4;
-      for (const [nx, ny, nz, d] of GEM_PLANES) {
-        const c = (dir.x * nx + dir.y * ny + dir.z * nz) / Math.hypot(nx, ny, nz);
-        if (c > 0.05) r1 = Math.min(r1, d / c);
-      }
-      h += U.uGem.value * (Math.min(r1, 1.35) - 1);
     }
     const c = dir.dot(this.U.uFront.value);
     if (this.form.aperFlat > 0.002) {
@@ -888,7 +874,7 @@ export class OrbScene {
     const lively = (reduced ? 0.2 : 1) * heavy * (0.4 + 0.6 * this.motion);
     const bt = this.floatClock += dt * (0.4 + 0.6 * this.pace);
     this.group.position.set(0.035 * Math.sin(bt * 0.29) * lively, 0.06 * Math.sin(bt * 0.47) * lively - 0.03 * this.gen.sss * this.dent, 0);
-    const own = 1 + 0.016 * Math.sin(bt * 0.62) * lively * (1 - this.sessionW);
+    const own = 1 + 0.008 * U.uSonic.value.x * Math.sin(this.floatClock * 1.1) * lively + 0.016 * Math.sin(bt * 0.62) * lively * (1 - this.sessionW);
     // the orb scales with the breath (cosine-eased in breath.ts): full on inhale/hold, smaller at rest
     this.group.scale.setScalar(own * (1 - this.sessionW * (1 - this.breath) * BREATH_SCALE));
     this.fogGroup.position.copy(this.group.position);
@@ -907,6 +893,19 @@ export class OrbScene {
     // the pillow's hollow: sinks quickly under the hand, fills out slowly
     this.dent = damp(this.dent, this.pressed ? 1 : 0, this.pressed ? 6 : 0.9, dt);
     U.uDent.value.w = Math.max(this.dent, Math.min(1, this.disperse * 0.5) * (this.pressed ? 1 : 0.4));
+
+    // sound: what is heard becomes slow waves and shimmer. Silent, it keeps a faint pulse of
+    // its own, so it is never dead; reduced motion keeps it fainter still.
+    {
+      const idle = 0.1 + 0.06 * Math.sin(this.floatClock * 0.5);
+      const e = Math.max(idle, Math.min(1, soundLevel.energy * 0.75 + soundLevel.low * 0.35)) * (reduced ? 0.3 : 1);
+      const v = U.uSonic.value;
+      v.x = damp(v.x, e, 1.6, dt);
+      v.y = damp(v.y, soundLevel.low, 1.6, dt);
+      v.z = damp(v.z, soundLevel.tone, 0.8, dt);
+      U.uSonicT.value += dt * (0.9 + 0.9 * v.x) * (0.4 + 0.6 * this.pace);
+      U.uSonicAmt.value = 1 - 0.8 * this.gen.sss; // cloth barely answers
+    }
 
     // ---- write uniforms ----
     const f = this.form;
@@ -958,9 +957,7 @@ export class OrbScene {
     U.uCaustic.value = g.caustic;
     U.uFilm.value = g.film;
     U.uSoft.value = g.soft;
-    U.uSpectral.value = g.spectral;
     this.syncDefines();
-    U.uGem.value = g.gem;
     // modelled scenes: build on first use, crossfade with the skin
     let creature = 0;
     for (const key of CREATURE_KEYS) {
@@ -1004,6 +1001,7 @@ export class OrbScene {
     U.uRoot.value = g.root;
     U.uSss.value = g.sss;
     U.uMatte.value = g.matte;
+    U.uAuraMat.value = g.aura;
     if (g.root > 0.001 && !this.rootTex) {
       this.rootTex = makeRootTexture();
       this.disposables.push(this.rootTex);
@@ -1031,11 +1029,11 @@ export class OrbScene {
       const k = reduced ? 0.2 : 1;
       U.uLightDir.value.set(-0.45 + 0.55 * Math.sin(a) * k + this.lean.x, 0.6 + Math.max(0, el) / 50 + this.lean.y, 0.4 + 0.3 * Math.cos(a) * k);
       const br = this.sessionW * this.breath;
-      const dimmed = 1 - 0.7 * Math.max(g.emit, g.nebula, g.petal, g.gill);
+      const dimmed = (1 - 0.7 * Math.max(g.nebula, g.petal, g.gill)) * (1 - 0.95 * g.emit);
       U.uAura.value.set(
         0.75 * Math.cos(a * 1.3) * k + this.lean.x * 1.2,
         0.5 * Math.sin(a * 0.9) * k + this.lean.y * 1.2,
-        (0.045 + 0.03 * br + 0.02 * Math.min(1, this.spin.length())) * dimmed,
+        (0.045 + 0.05 * U.uSonic.value.x * (0.7 + 0.3 * Math.sin(U.uSonicT.value * 0.5)) + 0.03 * this.gen.aura + 0.03 * br + 0.02 * Math.min(1, this.spin.length())) * dimmed,
         this.holdW,
       );
     }
@@ -1052,7 +1050,7 @@ export class OrbScene {
         p.visible = amt > 0.01;
       });
     setPts(this.dust, g.dust);
-    setPts(this.nebula, g.nebula * 0.3);
+    setPts(this.nebula, g.nebula * 0.12);
     setPts(this.specks, g.specks);
     // medusa: the bell contracts every few seconds (quick squeeze, slow release), paced
     if (g.emit > 0.001) {
@@ -1069,7 +1067,7 @@ export class OrbScene {
     }
 
     // generator 5: volumetric scatter
-    const fogAmt = Math.min(1, Math.max(g.scatter, f.haze * 0.85));
+    const fogAmt = Math.min(1, f.haze * 0.85);
     U.uFogAmt.value = fogAmt;
     this.paletteJS(0.35 + this.patternTime * 0.008, this.tmpC);
     // haze is greyed toward white, except in Janssens' coloured-light mode where it keeps its colour
@@ -1094,13 +1092,13 @@ export class OrbScene {
     const lightK = this.tmpC2.setRGB(1, 1, 1).lerp(this.lightColor, 0.35);
     const fieldCols = [U.uFieldA.value, U.uFieldB.value, U.uFieldC.value, U.uFieldD.value];
     fieldCols.forEach((c, i) => this.paletteJS(ft + i * 0.5 + (i % 2) * 0.13, c).multiply(lightK));
-    this.paletteJS(ft + 1.25, U.uFieldDeep.value).multiplyScalar(0.035).add(this.tmpC.setRGB(0.004, 0.005, 0.012));
+    this.paletteJS(ft + 1.25, U.uFieldDeep.value).multiplyScalar(0.035 * (1 - 0.95 * this.gen.emit)).add(this.tmpC.setRGB(0.004, 0.005, 0.012));
     U.uFieldTime.value = this.fieldTime;
     // the deep sea: bioluminescence looks best in the dark, so the field dims under medusa
     // deep space / deep sea: the field dims for the nebula and the medusa
-    U.uFieldLevel.value = (1 - 0.75 * Math.max(g.emit, g.petal, g.gill)) * (1 - 0.85 * g.nebula) * (0.034 + 0.026 * f.glow / 0.38) * (0.55 + 0.45 * this.lightInt) * (1 - ganz * 0.5);
+    U.uFieldLevel.value = (1 - 0.75 * Math.max(g.petal, g.gill)) * (1 - 0.97 * g.emit) * (1 - 0.85 * g.nebula) * (0.034 + 0.026 * f.glow / 0.38) * (0.55 + 0.45 * this.lightInt) * (1 - ganz * 0.5);
     this.paletteJS(this.patternTime * 0.03 + 0.4, U.uBleed.value).multiply(lightK);
-    U.uBleedAmt.value = (0.055 + f.glow * 0.12) * (1 - 0.6 * Math.max(g.emit, g.nebula, g.petal, g.gill)) + this.sessionW * (0.02 + 0.04 * this.breath) + fogAmt * 0.03 + this.holdW * 0.05;
+    U.uBleedAmt.value = (0.055 + f.glow * 0.12) * (1 - 0.6 * Math.max(g.nebula, g.petal, g.gill)) * (1 - 0.96 * g.emit) + this.sessionW * (0.02 + 0.04 * this.breath) + fogAmt * 0.03 + this.holdW * 0.05;
     this.updateOrbScreen();
 
     this.paletteJS(this.patternTime * 0.03 + 0.125, this.tmpC);
