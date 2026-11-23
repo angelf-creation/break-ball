@@ -88,7 +88,7 @@ export function BreathIndicator() {
         <button
           type="button"
           onClick={() => startSession('free')}
-          className="rounded-full px-2.5 py-1 text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+          className="tap rounded-btn px-3 py-1.5 text-white/75 hover:text-white"
         >
           End
         </button>
@@ -97,18 +97,32 @@ export function BreathIndicator() {
   );
 }
 
+/** After a session, or on returning: one line, then it fades. A whole week adds a few soft sparks. */
 export function SessionToast() {
-  const at = useStore((s) => s.sessionCompletedAt);
-  const now = useNow(1000, at != null);
-  const show = at != null && now - at < 4500;
+  const notice = useStore((s) => s.notice);
+  const now = useNow(500, notice != null);
+  const show = notice != null && now - notice.at < 9000;
   return (
     <div
-      aria-live="polite"
-      className={`glass-surface absolute left-1/2 top-20 -translate-x-1/2 z-20 rounded-full px-5 py-2 text-[12px] text-white/70 transition-opacity duration-1000 ${
-        show ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      role="status"
+      className={`pointer-events-none absolute left-1/2 top-[max(88px,calc(env(safe-area-inset-top)+88px))] z-40 w-[min(92vw,460px)] -translate-x-1/2 transition-opacity duration-1000 ${
+        show ? 'opacity-100' : 'opacity-0'
       }`}
     >
-      Session complete · take your time returning
+      {notice && (
+        <div key={notice.at} className="glass-surface notice-in relative rounded-panel px-6 py-4 text-center text-[14px] font-bold leading-relaxed text-white">
+          {notice.sparkle &&
+            Array.from({ length: 9 }, (_, i) => (
+              <span
+                key={i}
+                aria-hidden
+                className="spark"
+                style={{ left: `${6 + i * 11}%`, top: i % 2 ? '8%' : '84%', animationDelay: `${0.3 + i * 0.22}s` }}
+              />
+            ))}
+          {notice.text}
+        </div>
+      )}
     </div>
   );
 }

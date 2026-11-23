@@ -4,14 +4,6 @@ import { effectiveDate, formatHM, getCEParts, lightMood, PHASE_LABEL } from '../
 import { glass, glassBtn } from './ui';
 import { useNow } from './hooks';
 
-const PHASE_DOT: Record<string, string> = {
-  Night: '#6b5cff',
-  Morning: '#ffc58a',
-  Midday: '#f4f6ff',
-  Afternoon: '#ffe2b0',
-  Twilight: '#ff8ac0',
-};
-
 export function StatusPill() {
   const live = useStore((s) => s.time.live);
   const scrubHour = useStore((s) => s.time.scrubHour);
@@ -49,9 +41,8 @@ export function StatusPill() {
         aria-expanded={open}
         aria-label={`Central European time ${formatHM(p.hour, p.minute)} ${p.abbr}, ${PHASE_LABEL[mood.phase]}. Open time scrub.`}
         onClick={() => setOpen((o) => !o)}
-        className={`${glass} rounded-full h-9 pl-3 pr-3.5 flex items-center gap-2.5 text-[12px] text-white/75 hover:text-white transition-colors`}
+        className={`${glass} tap rounded-btn h-10 px-4 flex items-center gap-2.5 text-[12px] text-white/75 hover:text-white transition-colors`}
       >
-        <span className="h-2 w-2 rounded-full" style={{ background: PHASE_DOT[mood.phase], boxShadow: `0 0 10px ${PHASE_DOT[mood.phase]}` }} />
         <span className="tabular-nums font-bold text-white/90">{formatHM(p.hour, p.minute)}</span>
         <span className="text-white/40">{p.abbr}</span>
         <span className="text-white/25">·</span>
@@ -62,18 +53,18 @@ export function StatusPill() {
             <span className="text-white/40 tabular-nums">≈{mood.kelvin} K</span>
           </>
         )}
-        {!live && <span className="ml-0.5 rounded-full bg-white/10 px-1.5 py-[1px] text-[9px] uppercase tracking-[0.15em] text-white/60">scrub</span>}
+        {!live && <span className="ml-0.5 rounded bg-white/10 px-1.5 py-[1px] text-[9px] uppercase tracking-[0.15em] text-white/60">scrub</span>}
       </button>
 
       {open && (
-        <div className={`${glass} absolute top-11 w-[min(88vw,340px)] rounded-squircle px-6 py-5 z-30`}>
+        <div className={`${glass} absolute top-11 w-[min(88vw,340px)] rounded-panel px-7 py-6 z-30`}>
           <div className="flex items-center justify-between mb-3">
             <div className="text-[10px] uppercase tracking-[0.22em] text-white/40">Time scrub · Europe/Berlin</div>
             <button
               type="button"
               onClick={goLive}
               aria-pressed={live}
-              className={`rounded-full px-2.5 py-1 text-[11px] ${
+              className={`rounded-btn px-3 py-1.5 text-[11px] ${
                 live ? glassBtn(true) : `${glassBtn(false)} border-white/10 text-white/60 hover:text-white`
               }`}
             >

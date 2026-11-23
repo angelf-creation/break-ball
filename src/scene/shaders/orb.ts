@@ -1,4 +1,4 @@
-import { NOISE, SURFACE, LOOK, FIELD, DISPERSION, ORCHID, GEM } from './chunks';
+import { NOISE, SURFACE, LOOK, FIELD, DISPERSION, GEM } from './chunks';
 
 export const orbVertex = /* glsl */ `
 ${NOISE}
@@ -27,7 +27,6 @@ ${NOISE}
 ${LOOK}
 ${FIELD}
 ${DISPERSION}
-${ORCHID}
 ${GEM}
 uniform float uTime;
 uniform sampler2D uVideo;
@@ -40,31 +39,20 @@ uniform float uOrigin;  // the animation on the skin
 uniform float uRefract; // 1: lens refraction of the far wall + field behind
 uniform float uAbsorb;  // 1: Beer-Lambert density through the body
 uniform float uClarity; // 1: see-through shell (interior particles / fog show)
-uniform float uReflect; // 1: mirror (mercury)
 uniform float uCaustic; // 1: moving caustics (water)
 uniform float uFilm;    // 2: thin-film rim
 uniform float uSoft;    // 6: wrapped light / subsurface
 uniform float uSpectral; // 2: dispersion (prism; crystal fringes)
-uniform float uFacet;    // faceting: voronoi fracture into mirror-flat planes
 uniform float uGem;      // prism: rough-cut polyhedron (shape in chunks.ts)
-uniform float uDrop;     // mercury: heavy sagging drop
-uniform float uNebula;   // powder: the orb dissolves into a dust cloud
-uniform float uCrack;    // ice: live fracture network
-uniform sampler2D uCrackTex; // drawn by scene/fracture.ts
-uniform float uMycel;    // mould: mycelium network
-uniform sampler2D uMycelTex; // DLA filaments (scene/growth.ts)
-uniform float uFabric;   // pillow: woven velvet
-uniform float uOpen;     // orchid: 0 bud .. 1 open
+uniform mat3 uViewRot;      // object -> view rotation: patterns live on the surface and turn with it
+uniform float uPrint;       // pillow: how much of the pattern / artist is printed on the cloth
 uniform mat3 uGroupRot;      // the ball's rotation (object -> world), for facet normals
-uniform float uPetal;   // radial ribs: flower
-uniform float uGill;    // radial ribs: mushroom
-#define CAP_AXIS normalize(vec3(0.0, 0.8, -0.6)) // keep in sync with chunks.ts
-#define BELL_AXIS normalize(vec3(0.0, 0.96, 0.28)) // keep in sync with chunks.ts
-uniform float uEmit;    // medusa: bioluminescence (self-luminous, added after lighting)
-uniform float uPulse;   // medusa: bell contraction 0..1
 uniform float uRoot;    // branching: root mandala
-uniform sampler2D uRootTex; // R = coverage, G = thinness
+uniform sampler2D uRootTex; // R = arrival order, G = coverage, B = glowing channels
+uniform float uGrow;        // root: how far the growth front has come, 0..1
+uniform float uGrowFade;    // root: fades the old network before the next one starts
 uniform float uSss;     // pure subsurface (marshmallow)
+uniform float uCreature; // 0..1: the skin gives way to a modelled scene (scene/creatures)
 uniform float uMatte;   // no gloss, film or mirror
 uniform float uScale;   // breath scale of the whole orb
 uniform vec2 uResolution;
@@ -90,6 +78,19 @@ varying vec3 vVDir;
 varying vec3 vNv;
 varying vec3 vWorld;
 varying vec3 vN;
+
+// Direction on the ball -> the pattern's disc. Each hemisphere carries the whole
+// pattern; they mirror each other, so the two halves meet without a seam.
+vec2 discMap(vec3 d){
+  float th = acos(clamp(abs(d.z), 0.0, 1.0));
+  float f = 0.35 * sin(th) + 0.65 * th / 1.5707963;
+  return d.xy / max(length(d.xy), 1e-4) * f;
+}
+// A point on the view disc, on the near (+1) or far (-1) wall -> pattern disc.
+vec2 surf(vec2 q, float side){
+  float l2 = min(dot(q, q), 1.0);
+  return discMap(normalize(vec3(q, side * sqrt(1.0 - l2)) * uViewRot));
+}
 
 float lum(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
@@ -240,7 +241,9 @@ vec3 pattern(vec2 p){
 }
 
 // ---------- artist overlays ----------
-vec3 artist(vec3 col, vec2 p){
+// s: coordinates on the turning surface; v: the view disc (for modes that always face you)
+vec3 artist(vec3 col, vec2 s, vec2 v){
+  vec2 p = v;
   float r = length(p);
 #ifdef G_APERFLAT
   if (uAperFlat > 0.002){ // Turrell: glowing orb, flat window with a crisp edge (APER_COS in chunks.ts)
@@ -260,7 +263,8 @@ vec3 artist(vec3 col, vec2 p){
   }
 #endif
 #ifdef G_PRISM
-  if (uPrism > 0.002){ // Janssens: the ball as a volume of coloured light
+  if (uPrism > 0.002){
+    vec2 p = s; // Janssens: the ball as a volume of coloured light
     float t = uTime;
     // 1. light: a slow gradient through the palette (blue, yellow, orange, pink), turning
     float ga = 0.6 + t * 0.012;
@@ -322,7 +326,7 @@ vec3 artist(vec3 col, vec2 p){
     lg = mix(lg, vec3(0.42, 0.7, 0.38), smoothstep(0.45, 0.7, fy));
     lg = mix(lg, vec3(0.86, 0.84, 0.3), smoothstep(0.7, 0.98, fy));
     // two soft vertical shadows, like light passing through frosted acrylic
-    lg *= 1.0 - 0.1 * exp(-pow((abs(p.x) - 0.28) / 0.16, 2.0));
+    lg *= 1.0 - 0.1 * exp(-sq((abs(p.x) - 0.28) / 0.16));
     lg += 0.04 * fbm(p * 1.3 + uTime * 0.008);
     lg = max(mix(vec3(lum(lg)), lg, 1.55), 0.0);
     // a tall soft column of light, so the whole run of shades (top to bottom) shows
@@ -359,9 +363,10 @@ vec3 artist(vec3 col, vec2 p){
     vec3 room = uPal1 * wL + uPal0 * wR + uPal2 * wB;
     // a warm floor glow and a shifting band where two lights mix
     room = mix(room, uPal3, (1.0 - smoothstep(-0.8, -0.2, d.y)) * 0.55);
-    room += mix(uPal0, uPal2, 0.5) * 0.35 * exp(-pow(xz.x / 0.12, 2.0)) * (1.0 - wB * 0.5);
+    room += mix(uPal0, uPal2, 0.5) * 0.35 * exp(-sq(xz.x / 0.12)) * (1.0 - wB * 0.5);
     room *= 0.72; // saturated but below clipping, so the colour stays pure instead of blooming white
 
+    vec2 p = s;
     // 2. Physichromie: fine vertical lamellae in three colours. Their colour shifts with
     //    your viewpoint (and the pointer), and changes inside two overlapping circles.
     vec3 Nv = normalize(vNv);
@@ -401,7 +406,7 @@ vec3 artist(vec3 col, vec2 p){
     float grain = fbm(p * 3.0 + uTime * 0.03) * 0.06;
     vec3 sun = sodium * (1.05 * limb + grain) + vec3(1.0, 0.85, 0.5) * exp(-r * r * 4.0) * 0.35;
     col = mix(col, sun, uDisc * 0.9);
-    float horizon = exp(-pow(p.y / 0.018, 2.0));
+    float horizon = exp(-sq(p.y / 0.018));
     col = mix(col, col * 0.18, horizon * uDisc * 0.85);
   }
 #endif
@@ -412,7 +417,7 @@ vec3 artist(vec3 col, vec2 p){
 vec3 env(vec3 R){
   float up = R.y;
   vec3 c = mix(vec3(0.012, 0.011, 0.02), vec3(0.09, 0.09, 0.12), smoothstep(-0.2, 1.0, up));
-  float horizon = exp(-pow((up - 0.08) / 0.12, 2.0));
+  float horizon = exp(-sq((up - 0.08) / 0.12));
   c += palette(atan(R.z, R.x) / 3.14159265 + uTime * 0.01) * 0.35 * horizon;
   vec3 L1 = normalize(vec3(-0.5, 0.85, 0.25));
   vec3 L2 = normalize(vec3(0.7, 0.55, -0.4));
@@ -421,53 +426,13 @@ vec3 env(vec3 R){
   return c;
 }
 
-// ---- faceting: 3D cellular fracture of the sphere ----
-vec3 hash33(vec3 p){
-  p = fract(p * vec3(0.1031, 0.1030, 0.0973));
-  p += dot(p, p.yxz + 33.33);
-  return fract((p.xxy + p.yxx) * p.zyx);
-}
-// xyz = direction of this facet's plane (object space), w = distance to the nearest edge
-vec4 facetCell(vec3 d, float sc){
-  vec3 x = d * sc;
-  vec3 n = floor(x);
-  vec3 f = fract(x);
-  float F1 = 8.0, F2 = 8.0;
-  vec3 best = vec3(0.0);
-  for (int k = -1; k <= 1; k++)
-  for (int j = -1; j <= 1; j++)
-  for (int i = -1; i <= 1; i++){
-    vec3 g = vec3(float(i), float(j), float(k));
-    vec3 o = hash33(n + g);
-    vec3 r = g + o - f;
-    float dd = dot(r, r);
-    if (dd < F1){ F2 = F1; F1 = dd; best = n + g + o; }
-    else if (dd < F2){ F2 = dd; }
-  }
-  return vec4(normalize(best), sqrt(F2) - sqrt(F1));
-}
-
-// Liquid chrome reflects a bright studio: white above, a soft grey floor, a hard
-// dark band at the horizon and dark side walls, one softbox. That high-contrast
-// world is what makes chrome read as chrome.
-vec3 chromeEnv(vec3 R){
-  float y = R.y;
-  vec3 c = mix(vec3(0.06), vec3(1.08), smoothstep(-0.2, 0.42, y));
-  c *= 1.0 - 0.95 * exp(-pow((y - 0.05) / 0.07, 2.0));   // the studio's horizon line
-  c *= 1.0 - 0.7 * exp(-pow((y + 0.3) / 0.09, 2.0));     // shadow band on the floor
-  c += 0.35 * exp(-pow((y + 0.12) / 0.05, 2.0));         // a bright floor reflection line
-  float az = atan(R.z, R.x);
-  c *= 1.0 - 0.88 * smoothstep(0.45, 0.9, sin(az * 2.0 + 0.6)) * smoothstep(-0.05, 0.6, y); // dark walls
-  c += 0.7 * smoothstep(0.95, 0.985, dot(R, normalize(vec3(-0.55, 0.7, 0.35)))); // softbox
-  return c;
-}
-
 // What the lens bends: the Op-Art pattern on the far wall. The video alone is
 // dark in large areas, so the high-contrast cellular dome is fed in with it.
 vec3 refrSource(vec2 q){
-  vec3 c = pattern(q);
-  if (uPat.x > 0.002) c += uPat.x * opCell(q) * 0.7;
-  return artist(c, q);
+  vec2 s = surf(q, -1.0);
+  vec3 c = pattern(s);
+  if (uPat.x > 0.002) c += uPat.x * opCell(s) * 0.7;
+  return artist(c, s, q);
 }
 
 void main(){
@@ -486,39 +451,25 @@ void main(){
   // Far wall seen through a clear shell: the same content, inverted like a ball
   // lens and dimmed.
   vec2 q = -p * 0.82;
-  vec3 bc = artist(pattern(q), q) * 0.2;
+  vec2 qs = surf(q, -1.0);
+  vec3 bc = artist(pattern(qs), qs, q) * 0.2;
   bc *= mix(vec3(1.0), uLightColor, 0.38) * uLightInt + uAmbient;
-  gl_FragColor = vec4(max(bc, 0.0), (1.0 - uSoften * smoothstep(0.45, 1.0, r) * 0.95) * (1.0 - uNebula) * (1.0 - uField));
+  gl_FragColor = vec4(max(bc, 0.0), (1.0 - uSoften * smoothstep(0.45, 1.0, r) * 0.95) * (1.0 - uCreature));
   return;
 #endif
 
   // how far the displaced normal leans away from the plain sphere (view space)
   vec2 dN = normalize(vNv).xy - vd.xy;
   vec3 N = normalize(vN);
-  // Faceting: replace the smooth normal with the flat normal of this facet, so
-  // planes are mirror-flat and meet at hard edges.
-  float facetEdge = 0.0;
-  float facetW = 1.0;
-  float facetShade = 0.5;
-#ifdef G_FACET
-  if (uFacet > 0.002){
-    vec4 fc = facetCell(normalize(vDir), 1.9);
-    facetShade = fract(sin(dot(fc.xyz, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-    vec3 Nf = normalize(uGroupRot * fc.xyz);
-    N = normalize(mix(N, Nf, uFacet));
-    vec3 Nfv = normalize(mat3(viewMatrix) * Nf);
-    dN = mix(dN, Nfv.xy - vd.xy, uFacet);
-    facetW = fc.w;
-    float ew = fwidth(fc.w) * 1.2 + 0.002;
-    facetEdge = 1.0 - smoothstep(0.0, ew + 0.008, fc.w);
-  }
-#endif
   vec3 V = normalize(cameraPosition - vWorld);
   vec3 L = normalize(uLightDir);
   vec3 H = normalize(L + V);
-  float NdL = max(dot(N, L), 0.0);
-  float NdH = max(dot(N, H), 0.0);
-  float NdV = max(dot(N, V), 0.0);
+  float NdL = clamp(dot(N, L), 0.0, 1.0);
+  float NdH = clamp(dot(N, H), 0.0, 1.0);
+  // clamped on both sides: a flat face turned straight at you (Turrell's window) rounds
+  // to slightly over 1, and pow(1.0 - NdV, 3.5) of that is NaN, which the bloom blurs
+  // into flashing white squares on phones
+  float NdV = clamp(dot(N, V), 0.0, 1.0);
   float fres = pow(1.0 - NdV, 5.0);
   vec3 refl = reflect(-V, N);
   vec2 suv = gl_FragCoord.xy / uResolution;
@@ -528,7 +479,8 @@ void main(){
   vec3 rd = normalize(vWorld - cameraPosition);
   float T = clamp(-dot(vWorld, rd) / Rw, 0.0, 1.0);
 
-  vec3 base = artist(pattern(p), p);
+  vec2 sp = discMap(normalize(vDir));
+  vec3 base = artist(pattern(sp), sp, p);
   // light the orb makes itself; added after lighting, so it is never shaded or tinted
   vec3 emission = vec3(0.0);
 
@@ -544,7 +496,7 @@ void main(){
     vec3 wall;
     // dispersion: each band of the spectrum bends by a slightly different amount, so
     // colour only appears where light bends hard (edges, folds); the body stays clear
-    float bend = length(off) / max(uRefract, 0.05) + length(dN) * 1.5 + facetEdge * 0.6 + pow(1.0 - NdV, 3.0) * 0.8;
+    float bend = length(off) / max(uRefract, 0.05) + length(dN) * 1.5 + pow(1.0 - NdV, 3.0) * 0.8;
     vec3 specW = vec3(0.0);
     if (uSpectral > 0.002){
       float spread = uSpectral * (0.02 + bend) * 1.1;
@@ -564,9 +516,8 @@ void main(){
     vec2 so = (-p * 0.55 * T + dN * 0.5) * uOrbR * vec2(1.0 / uAspect, 1.0) * uRefract;
     vec3 behind = fieldColor(clamp(suv + so, 0.0, 1.0));
     wall = mix(wall, specW, uSpectral);
-    // crystal and prism are achromatic in the body: drain the far wall's colour where it doesn't bend
-    // crystal: achromatic throughout (colour only in the edge fringes); prism: colourless where light barely bends
-    float drain = max(uFacet * 0.92, uSpectral * (1.0 - smoothstep(0.1, 0.6, bend)) * 0.85);
+    // prism: colourless where light barely bends
+    float drain = uSpectral * (1.0 - smoothstep(0.1, 0.6, bend)) * 0.85;
     wall = mix(wall, vec3(lum(wall)), drain);
     vec3 refr = wall * 0.75 + behind * (0.55 + 0.45 * (1.0 - T));
     through = mix(through, refr, clamp(uRefract * 1.5, 0.0, 1.0));
@@ -594,7 +545,7 @@ void main(){
 #ifdef G_SOFT
   if (uSoft > 0.002){
     float wrap = (dot(N, L) + 0.7) / 1.7;
-    vec3 sss = body * 1.06 * (0.55 + 0.5 * wrap) + mix(body, vec3(1.0), 0.35) * 0.3 * pow(1.0 - NdV, 2.0)
+    vec3 sss = body * 1.06 * (0.55 + 0.5 * wrap) + mix(body, vec3(1.0), 0.35) * 0.3 * sq(1.0 - NdV)
              + uLightColor * 0.4 * pow(NdH, 26.0);
     sss = mix(vec3(lum(sss)), sss, 1.15);
     body = mix(body, sss, uSoft);
@@ -611,220 +562,78 @@ void main(){
   }
 #endif
 
-  // ---- medusa: a deep-sea jellyfish that emits its own light ----
-  // Genuine emission (into 'emission', not the lit body): radial canals, the ring
-  // canal at the margin, four gonads, and eight comb rows whose colour comes from
-  // diffraction off ciliary rows, the same spectral code as the prism, swept along
-  // the rows rather than at edges. The bell body itself is dark and translucent.
-#ifdef G_EMIT
-  if (uEmit > 0.002){
-    vec3 d = normalize(vDir);
-    vec3 ax = BELL_AXIS;
-    float c = dot(d, ax);
-    vec3 t1 = normalize(cross(ax, vec3(1.0, 0.0, 0.0)));
-    vec3 t2 = cross(ax, t1);
-    float ang = atan(dot(d, t2), dot(d, t1));
-    vec3 bell = vec3(0.015, 0.025, 0.07) + body * 0.05;
-    float cx = ang * 4.0;
-    float canal = mix(0.03, pow(abs(cos(cx)), 30.0), 1.0 - smoothstep(0.3, 0.8, fwidth(cx))) * smoothstep(-0.3, 0.85, c);
-    float ring = exp(-pow((c + 0.24) / 0.035, 2.0));
-    float gonad = exp(-pow((c - 0.42) / 0.12, 2.0)) * pow(abs(cos(ang * 2.0)), 3.0);
-    float glowP = 0.65 + 0.55 * uPulse; // brighter as the bell contracts
-    vec3 e = vec3(0.2, 0.85, 1.0) * canal * 0.55 + vec3(0.5, 0.42, 1.0) * ring * 0.85 + vec3(1.0, 0.42, 0.85) * gonad * 0.4;
-    // light scattering through the bell: a pale cyan core fading to a violet rim
-    e += mix(vec3(0.75, 1.0, 1.0), vec3(0.55, 0.3, 1.0), (1.0 - smoothstep(-0.15, 0.85, c))) * 0.22 * smoothstep(-0.3, 0.4, c);
-    // comb rows, between the canals: a travelling spectrum, like a comb jelly
-    float rx = ang * 4.0 + 0.785;
-    float row = mix(0.05, pow(abs(cos(rx)), 70.0), 1.0 - smoothstep(0.3, 0.8, fwidth(rx))) * smoothstep(-0.2, 0.55, c);
-    e += spectral(fract(c * 2.5 - uTime * 0.35)) * row * 0.4;
-    // the subumbrella (the hollow underside) glows softly from within
-    e += vec3(0.3, 0.5, 1.0) * 0.25 * (1.0 - smoothstep(-0.45, -0.25, c));
-    body = mix(body, bell, uEmit);
-    emission += e * glowP * uEmit;
-  }
-#endif
-
-  // ---- flower: night orchid ----
-  // Deep violet-black petals that unfurl from a closed bud; thin-film edges shifting
-  // from violet to gold at glancing angles; long curving stamens glowing faintly.
-  // The orb's outline follows the petals as they open (organicShape in chunks.ts).
-#ifdef G_PETAL
-  if (uPetal > 0.002){
-    float a = atan(p.y, p.x);
-    float r = length(p);
-    float op = uOpen * uOpen * (3.0 - 2.0 * uOpen);
-    vec2 ol = orchidOutline(a + (1.0 - op) * 0.6);          // the petals turn as they open
-    float R = mix(0.16, ol.x, op);
-    float pa = fwidth(r) * 1.5 + 0.012;
-    float inFl = 1.0 - smoothstep(R - pa, R + pa, r);
-    float t = r / max(R, 1e-3);
-    // violet-black velvet petals, a little lighter toward the tips, with faint veins
-    vec3 petal = mix(vec3(0.03, 0.0, 0.06), vec3(0.26, 0.05, 0.42), smoothstep(0.2, 1.0, t));
-    if (ol.y > 1.5) petal = mix(petal, vec3(0.45, 0.06, 0.32), 0.35 * smoothstep(0.3, 0.9, t)); // the lip, wine-dark
-    float vx = a * 40.0 + 2.0 * sin(t * 4.0);
-    float veins = mix(0.4, pow(abs(cos(vx)), 6.0), 1.0 - smoothstep(0.3, 0.8, fwidth(vx)));
-    petal *= 0.8 + 0.35 * veins * smoothstep(0.2, 0.9, t);
-    petal *= 0.55 + 0.45 * ((dot(N, L) + 0.6) / 1.6);
-    // iridescent edge: thin-film interference mapped from violet to gold as the angle grazes
-    float edge = smoothstep(R * 0.78, R, r) * inFl;
-    vec3 film = thinFilm(NdV, 380.0 + 140.0 * sin(a * 3.0 + uTime * 0.02));
-    vec3 iri = mix(vec3(0.62, 0.25, 1.0), vec3(1.0, 0.78, 0.3), clamp(pow(1.0 - NdV, 1.2) + 0.35 * (film.r - film.b), 0.0, 1.0));
-    petal += iri * edge * 0.55;
-    // long curving stamens arching up and out of the heart, glowing faintly (emitted)
-    float st = 0.0, anther = 0.0;
-    for (int k = 0; k < 5; k++){
-      float fk = float(k);
-      float a0 = 1.05 + 0.26 * fk;
-      float L = (0.42 + 0.06 * sin(fk * 2.3)) * op;
-      float best = 9.0;
-      for (int j = 0; j <= 10; j++){
-        float sj = float(j) / 10.0;
-        float ang = a0 + (0.5 - fk * 0.12) * sj * sj;
-        vec2 q = sj * L * vec2(cos(ang), sin(ang));
-        best = min(best, length(p - q));
-      }
-      st += exp(-pow(best / 0.006, 2.0));
-      float ae = a0 + (0.5 - fk * 0.12);
-      anther += exp(-pow(length(p - L * vec2(cos(ae), sin(ae))) / 0.016, 2.0));
-    }
-    emission += (vec3(0.85, 0.7, 1.0) * st * 0.35 + vec3(1.0, 0.82, 0.4) * anther * 0.6) * uPetal;
-    // the column at the heart, a soft glow
-    emission += vec3(0.9, 0.7, 1.0) * exp(-r * r * 220.0) * 0.4 * uPetal;
-    // night: everything around the bloom is near-black
-    vec3 night = vec3(0.012, 0.008, 0.024) + vec3(0.25, 0.08, 0.4) * 0.08 * exp(-pow(max(r - R, 0.0) / 0.1, 2.0));
-    body = mix(body, mix(night, petal, inFl), uPetal);
-  }
-#endif
-
-  // ---- radial ribs: mushroom ----
-  // Shape: a bell cap (the surface itself is reshaped in chunks.ts, capShape), tipped
-  // so its hollow underside faces you. Texture: fine fibres down the cap, flowing gill
-  // lamellae underneath with a darker rim edge. Colour and light: soft teal, cyan and
-  // green with lilac highlights, a coral glow at the edges, smooth subsurface light.
-#ifdef G_GILL
-  if (uGill > 0.002){
-    vec3 d = normalize(vDir);
-    vec3 ax = CAP_AXIS;
-    float c = dot(d, ax);
-    vec3 t1 = normalize(cross(ax, vec3(1.0, 0.0, 0.0)));
-    vec3 t2 = cross(ax, t1);
-    float ang = atan(dot(d, t2), dot(d, t1));
-    float under = (1.0 - smoothstep(-0.2, -0.1, c));
-    float wrapM = (dot(N, L) + 0.75) / 1.75; // smooth, soft light
-    vec3 teal = vec3(0.1, 0.62, 0.66), cyan = vec3(0.35, 0.78, 0.86), green = vec3(0.12, 0.6, 0.38), lilac = vec3(0.78, 0.66, 0.86);
-    vec3 coral = vec3(1.0, 0.5, 0.36);
-    // cap: fibres running from the crown down to the rim
-    float fx = ang * 90.0 + 0.4 * snoise(vec2(ang * 6.0, c * 3.0));
-    float fibre = mix(0.5, 0.5 + 0.5 * cos(fx), 1.0 - smoothstep(0.3, 0.8, fwidth(fx)));
-    float streak = fbm(vec2(ang * 24.0, c * 2.0)) * 0.5 + 0.5;
-    vec3 capC = mix(teal, cyan, smoothstep(0.1, 0.95, c));
-    capC = mix(capC, green, 0.35 * (1.0 - smoothstep(-0.1, 0.4, c)));
-    capC = mix(capC, lilac, 0.3 * smoothstep(0.55, 1.0, c) + 0.15 * streak);
-    capC *= (0.42 + 0.62 * wrapM) * (0.88 + 0.12 * fibre) * (0.92 + 0.12 * streak);
-    // underside (after the reference): cream gills striated from the stem to the rim,
-    // an orange band, a deep blue ring by the stem, glowing white spots along the rim
-    float rr = clamp((-c - 0.18) / 0.72, 0.0, 1.0);          // 0 at the rim .. 1 at the stem
-    float gx = ang * 60.0 + 0.6 * sin(rr * 5.0 + ang * 3.0);
-    float gill = mix(0.5, pow(abs(cos(gx)), 1.6), 1.0 - smoothstep(0.3, 0.8, fwidth(gx)));
-    vec3 gillC = mix(vec3(0.95, 0.88, 0.74), vec3(1.0, 0.58, 0.28), smoothstep(0.38, 0.6, rr));
-    gillC = mix(gillC, vec3(0.12, 0.3, 0.75), smoothstep(0.66, 0.82, rr));
-    gillC = mix(gillC, vec3(0.02, 0.02, 0.05), smoothstep(0.86, 0.97, rr));   // the dark throat by the stem
-    gillC *= (0.62 + 0.42 * gill) * (0.62 + 0.4 * wrapM);
-    float edge = exp(-pow((c + 0.15) / 0.035, 2.0));          // the rolled edge of the cap
-    gillC = mix(gillC, vec3(0.9, 0.82, 0.68) * 0.7, edge * 0.6);
-    // bioluminescent spots ringing the rim (emitted, not lit)
-    float sa = fract(ang / 6.2831853 * 26.0) - 0.5;
-    float sr = (rr - 0.1) / 0.06;
-    float spot = exp(-(sa * sa * 30.0 + sr * sr) * 2.2) * under;
-    emission += vec3(0.95, 0.98, 1.0) * spot * 0.7 * uGill;
-    // the thick stem, pale and softly lit
-    float stemW = 1.0 - smoothstep(-0.905, -0.885, c);
-    gillC = mix(gillC, vec3(0.92, 0.86, 0.74) * (0.5 + 0.5 * wrapM), stemW);
-    emission += vec3(0.9, 0.85, 0.7) * stemW * 0.06 * uGill;
-    vec3 mu = mix(capC, gillC, under);
-    // the coral glow at the silhouette, as in the lit sculpture
-    mu += coral * pow(1.0 - NdV, 2.6) * 0.55;
-    body = mix(body, mu, uGill);
-  }
-#endif
-
-  // ---- branching: root mandala, glowing where the tendrils are thinnest ----
+  // ---- roots: a branching network growing over a luminous amber ground ----
+  // After the recording: dark red-brown branches creep outward like a river delta,
+  // feathery at the tips, with a glowing white-gold channel running through the trunks.
+  // The texture stores WHEN each twig was reached; uGrow sweeps through that order.
 #ifdef G_ROOT
   if (uRoot > 0.002){
-    float ra = uTime * 0.0012; // slow: root turns almost imperceptibly
-    vec2 rq = mat2(cos(ra), -sin(ra), sin(ra), cos(ra)) * p;
-    vec4 rt = texture2D(uRootTex, rq * 0.5 + 0.5);
-    vec4 rb = texture2D(uRootTex, rq * 0.5 + 0.5, 3.0);
-    vec3 earth = mix(vec3(0.045, 0.03, 0.02), palette(1.0) * 0.08, 0.35);
-    vec3 wood = vec3(0.42, 0.26, 0.13);
-    float sap = 0.6 + 0.4 * sin(length(p) * 16.0 - uTime * 0.16); // light pulsing slowly outward along the roots
-    vec3 tipGlow = mix(vec3(1.0, 0.82, 0.5), palette(0.3), 0.25);
-    vec3 rc = earth + rb.r * tipGlow * 0.1;
-    rc = mix(rc, wood * (1.0 - rt.g) * 0.8 + tipGlow * rt.g * sap * 1.1, rt.r);
+    vec3 d = normalize(vDir);
+    vec2 rq = discMap(d);
+    if (d.z < 0.0) rq = mat2(0.36, -0.93, 0.93, 0.36) * rq; // the far side is turned, so it isn't a mirror
+    // slow undulation: the whole network sways, more toward its tips
+    float rl = length(rq);
+    rq += 0.022 * rl * vec2(sin(rq.y * 5.0 + uTime * 0.23), cos(rq.x * 4.0 - uTime * 0.19));
+    vec2 ruv = rq * 0.47 + 0.5;
+    vec4 rt = texture2D(uRootTex, ruv);
+    vec4 rb = texture2D(uRootTex, ruv, 3.5);
+    float ord = rt.r / max(rt.g, 0.02);
+    float ordB = rb.r / max(rb.g, 0.02);
+    float lead = uGrow * 1.12;
+    float seen = (1.0 - smoothstep(lead - 0.05, lead, ord)) * rt.g;
+    float seenB = (1.0 - smoothstep(lead - 0.1, lead, ordB)) * rb.g;
+    float tip = smoothstep(lead - 0.16, lead - 0.02, ord) * seen;  // the advancing front
+    vec3 amber = mix(vec3(0.95, 0.3, 0.025), vec3(0.5, 0.07, 0.005), smoothstep(0.1, 1.0, rl));
+    amber *= 0.75 + 0.25 * fbm(rq * 2.2 + uTime * 0.02);
+    amber += vec3(1.0, 0.6, 0.2) * 0.35 * exp(-rl * rl * 5.0);
+    amber *= 1.0 - 0.6 * clamp(seenB * 1.6, 0.0, 1.0);            // the branches shade the ground around them
+    // relief: light falls across the branches
+    vec2 gr = vec2(texture2D(uRootTex, ruv + vec2(0.0024, 0.0), 1.0).g, texture2D(uRootTex, ruv + vec2(0.0, 0.0024), 1.0).g) - texture2D(uRootTex, ruv, 1.0).g;
+    vec3 bark = mix(vec3(0.085, 0.018, 0.008), vec3(0.3, 0.075, 0.02), clamp(0.5 - (gr.x - gr.y) * 1.6, 0.0, 1.0));
+    bark = mix(bark, vec3(0.75, 0.22, 0.04), tip * 0.8);
+    float sap = 0.65 + 0.35 * sin(ord * 34.0 - uTime * 0.9);       // light travelling out along the channels
+    float chan = rt.b * seen;
+    vec3 rc = mix(amber, bark, seen * uGrowFade);
+    vec3 glow = vec3(1.0, 0.82, 0.42) * (chan * sap * 1.25 + rb.b * seenB * 0.5) + vec3(1.0, 0.5, 0.12) * tip * 0.35;
+    rc += glow * uGrowFade;
+    float wrapR = (dot(N, L) + 0.9) / 1.9;
+    rc *= 0.5 + 0.6 * wrapR;
+    emission += amber * (1.0 - seen * uGrowFade) * 0.28 * uRoot;
+    rc += vec3(1.0, 0.42, 0.1) * pow(1.0 - NdV, 2.5) * 0.4;
     body = mix(body, rc, uRoot);
   }
 #endif
 
-  // ---- mould: a porous ball of mycelium (matte, no shell) ----
-  // Dense fuzzy filament network over the whole surface: DLA filaments sampled at
-  // two scales and turns, a ridged-noise web between them, dark pores, fine fuzz.
-  // Muted grey-green, with the yellow-ochre of the reference creeping through.
-#ifdef G_MYCEL
-  if (uMycel > 0.002){
-    vec3 d = normalize(vDir);
-    vec2 m1 = d.xy * 0.62 + 0.5;
-    vec2 m2 = mat2(0.8, -0.6, 0.6, 0.8) * d.zx * 0.9 + 0.5;
-    float f1 = texture2D(uMycelTex, m1).g;
-    float f2 = texture2D(uMycelTex, fract(m2 * 1.7)).g;
-    float halo = texture2D(uMycelTex, m1, 3.0).g;
-    vec2 wq = d.xy * 9.0 + d.z * 4.0;
-    float web = pow(1.0 - abs(snoise(wq)), 10.0) + 0.6 * pow(1.0 - abs(snoise(wq * 2.3 + 7.1)), 14.0);
-    float fil = clamp(f1 * 0.9 + f2 * 0.6 + web * 0.55, 0.0, 1.0);
-    vec3 xq = d * 7.0;
-    float pore = smoothstep(0.55, 0.85, fbm(xq.xy + xq.z) * 0.5 + 0.5);
-    float fuzz = hash12(floor(gl_FragCoord.xy * 0.75)) * 0.5 + fbm(d.xy * 60.0) * 0.5;
-    vec3 base = mix(vec3(0.24, 0.32, 0.22), vec3(0.46, 0.54, 0.4), fbm(d.xy * 3.0 + 2.0) * 0.5 + 0.5); // muted grey-green
-    base = mix(base, vec3(0.62, 0.55, 0.3), 0.25 * smoothstep(0.2, 0.7, fbm(d.zy * 2.0 + 5.0) * 0.5 + 0.5)); // ochre patches
-    vec3 m = base * (0.82 + 0.25 * fuzz);
-    m = mix(m, vec3(0.12, 0.14, 0.1), pore * 0.75);                 // porous: dark hollows
-    m = mix(m, vec3(0.8, 0.84, 0.76), fil * 0.7);                    // the pale grey filaments
-    m += vec3(0.8, 0.84, 0.76) * halo * 0.12;                        // fuzz glowing around them
-    float wrapM = (dot(N, L) + 0.5) / 1.5;
-    m *= 0.55 + 0.5 * wrapM;                                          // matte, soft light
-    body = mix(body, m, uMycel);
-  }
-#endif
-
-  // ---- pure subsurface: marshmallow (matte, pastel, no refraction) ----
+  // ---- pillow: plush velvet, printable ----
 #ifdef G_SSS
   if (uSss > 0.002){
-    // pale warm white (pillow)
-    vec3 pastel = mix(mix(palette(0.2), vec3(1.0, 0.95, 0.95), 0.74), vec3(1.0, 0.96, 0.9), uFabric);
-    float wrapS = (dot(N, L) + 0.6) / 1.6;
-    vec3 mm = pastel * (0.16 + 0.84 * wrapS);
-    mm *= 0.6 + 0.4 * smoothstep(-0.9, 0.45, N.y); // the underside sits in its own soft shade
-    // light scattering out through the thin edge, warmest on the lit side
-    mm += pastel * vec3(1.0, 0.8, 0.78) * 0.32 * pow(1.0 - NdV, 2.0) * (0.45 + 0.55 * wrapS);
-    // velvet: a fine weave and a soft sheen where the nap catches the light at grazing angles
     vec3 dd = normalize(vDir);
-    float weave = 0.5 + 0.25 * (sin(dd.x * 520.0) + sin(dd.y * 520.0));
-    weave = mix(0.5, weave, 1.0 - smoothstep(0.3, 0.9, fwidth(dd.x * 520.0)));
-    mm *= 1.0 - 0.05 * uFabric * (1.0 - weave);
-    mm += vec3(1.0, 0.97, 0.92) * pow(1.0 - NdV, 3.0) * 0.28 * uFabric * (0.5 + 0.5 * wrapS);
+    // the cloth: warm ivory, or whatever pattern / artist is chosen, printed on it
+    vec3 ivory = vec3(0.93, 0.85, 0.77);
+    vec3 ink = clamp(mix(vec3(lum(base)), base, 1.05) * 1.25, 0.0, 1.0) * 0.86 + 0.12;
+    vec3 cloth = mix(ivory, ink, uPrint);
+    // the nap: pile brushed in patches, so it darkens and lightens like crushed velvet
+    vec2 nq = dd.xy * 5.0 + dd.z * 2.3;
+    float brushed = fbm(nq + 0.4 * fbm(nq * 1.7)) ;
+    float pile = snoise(dd.xy * 150.0 + dd.z * 60.0) * 0.5 + snoise(dd.yx * 290.0) * 0.5;
+    float fwp = fwidth(dd.x) + fwidth(dd.y);
+    pile *= 1.0 - smoothstep(0.002, 0.009, fwp);
+    vec3 Nf = normalize(N + vec3(brushed * 0.07 + pile * 0.06, brushed * -0.05, pile * 0.05));
+    float wrapS = (dot(Nf, L) + 0.75) / 1.75;
+    vec3 mm = cloth * (0.26 + 1.0 * wrapS * wrapS);
+    mm *= 0.62 + 0.38 * smoothstep(-0.95, 0.4, N.y);             // it lies in its own soft shade
+    mm *= 1.0 + 0.13 * brushed + 0.12 * pile;
+    // velvet sheen at grazing angles + a broad silky highlight along the weave
+    float ndv = clamp(dot(Nf, V), 0.0, 1.0);
+    mm += mix(cloth, vec3(1.0, 0.95, 0.88), 0.45) * pow(1.0 - ndv, 2.4) * 0.55 * (0.45 + 0.55 * wrapS);
+    vec3 Tn = normalize(cross(Nf, vec3(0.25, 1.0, 0.1)));
+    float ht = dot(Tn, H);
+    mm += mix(cloth, vec3(1.0), 0.3) * pow(max(1.0 - ht * ht, 0.0), 22.0) * smoothstep(-0.1, 0.7, dot(Nf, L)) * 0.16;
+    // the stitched seam where the two faces meet
+    float seam = exp(-sq(dd.z / 0.028));
+    mm *= 1.0 - 0.4 * exp(-sq((abs(dd.z) - 0.055) / 0.02));
+    mm = mix(mm, cloth * (0.25 + 0.6 * wrapS), seam * 0.5);
     body = mix(body, mm, uSss);
-  }
-#endif
-
-  // ---- generator 1: mirror (mercury) ----
-#ifdef G_REFLECT
-  if (uReflect > 0.002){
-    // large, slow, smooth undulations of the surface (no fine ripples)
-    vec3 Nm = normalize(N + vec3(snoise(p * 1.1 + uTime * 0.025), 0.0, snoise(p * 1.1 + 7.0 - uTime * 0.02)) * 0.24);
-    vec3 R = reflect(-V, Nm);
-    float fm = 0.66 + 0.5 * pow(1.0 - max(dot(Nm, V), 0.0), 3.0); // a stronger fresnel peak
-    vec3 opp = artist(pattern(-p * 0.85 + dN * 0.8), -p) * 0.06;
-    vec3 c = chromeEnv(R) * 0.9 * fm + vec3(1.0) * 2.6 * pow(max(dot(Nm, H), 0.0), 320.0) + vec3(1.0) * 0.6 * pow(max(dot(Nm, H), 0.0), 40.0);
-    body = mix(body, c, uReflect);
   }
 #endif
 
@@ -849,7 +658,7 @@ void main(){
     float rimBand = smoothstep(0.5, 0.97, r);
     glassC = mix(glassC, glassC * glassC * 1.6, rimBand * 0.7);
     glassC *= mix(1.0, 0.28, rimBand * rimBand);
-    glassC += mix(vec3(1.0), strata, 0.4) * exp(-pow((r - 0.935) / 0.018, 2.0)) * 0.3;
+    glassC += mix(vec3(1.0), strata, 0.4) * exp(-sq((r - 0.935) / 0.018)) * 0.3;
     // soft product-shot highlights, upper right: a large window and a small crisp point
     vec2 hq = (p - vec2(0.36, 0.42)) * vec2(1.0, 1.45);
     float win = (1.0 - smoothstep(0.11, 0.19, length(hq))) * smoothstep(-0.02, 0.06, dot(p - vec2(0.24, 0.3), vec2(0.6, 0.8)));
@@ -859,18 +668,6 @@ void main(){
   }
 #endif
 
-  // ---- ice: clear, cold, with a fracture network that grows ----
-#ifdef G_CRACK
-  if (uCrack > 0.002){
-    vec2 cuv = p * 0.5 + 0.5;
-    float cr = texture2D(uCrackTex, cuv).r;
-    float cg = texture2D(uCrackTex, cuv, 2.5).r; // the glow along each crack
-    // cold palette: clear white-cyan body, deep blue where it is thickest
-    vec3 cold = mix(vec3(0.86, 0.96, 1.0), vec3(0.08, 0.22, 0.55), smoothstep(0.35, 1.0, T));
-    body = mix(body, body * cold * 1.25 + cold * 0.05, uCrack);
-    body += (vec3(0.95, 0.99, 1.0) * cr * 0.85 + vec3(0.5, 0.85, 1.0) * cg * 0.35) * uCrack;
-  }
-#endif
   // ---- prism: the rough-cut gem's edges catch a thin bright line and a spectrum ----
 #ifdef G_GEM
   if (uGem > 0.002){
@@ -884,30 +681,18 @@ void main(){
   // glossy surface: environment reflection + speculars (all non-mirror materials)
   // Turrell's field is matte and even, like fog: no sharp speculars in his mode
   // frost diffuses reflections (frosted, it glows rather than mirrors)
-  float gloss = (1.0 - uReflect) * (1.0 - 0.85 * uAperFlat) * (1.0 - uMatte);
+  float gloss = (1.0 - 0.85 * uAperFlat) * (1.0 - uMatte);
   body += gloss * (env(refl) * (0.03 + 0.75 * fres) * (0.35 + 0.65 * max(uRefract, uClarity)) * (1.0 - 0.75 * uResin)
          + uLightColor * (0.2 * pow(NdH, 70.0) * uOrigin + 1.6 * pow(NdH, 300.0) * (1.0 - uOrigin)));
   // Pashgian: very high polish, a tight bright highlight and a crisp reflection at the rim
   body += uResin * (uLightColor * 2.4 * pow(NdH, 900.0) + env(refl) * 0.35 * fres);
 
-  // facet edges: a hard bright line with a thin spectral fringe beside it (edges only)
-#ifdef G_FACET
-  if (uFacet > 0.002){
-    float fringe = (1.0 - smoothstep(0.0, 0.045, facetW)) - facetEdge * 0.6;
-    body += vec3(1.0) * facetEdge * 0.12 * uFacet;
-    // mirror-flat planes: each facet reflects its own patch of the room, so neighbours differ
-    body += env(reflect(-V, N)) * 0.32 * uFacet + uLightColor * 0.45 * pow(max(dot(N, H), 0.0), 260.0) * uFacet;
-    body += spectral(fract(facetW * 14.0 + dot(N, V) * 2.0)) * max(fringe, 0.0) * 0.4 * uFacet * (0.4 + uSpectral);
-  }
-#endif
   vec3 col = body;
 
   // time-of-day: a gentle tint and brightness, not a full white-balance shift
   vec3 tint = mix(vec3(1.0), uLightColor, 0.38) * uLightInt + uAmbient;
   col *= tint;
   col += emission; // self-luminous: after the lighting, untouched by time of day
-  // mercury stays silver-grey whatever the light colour
-  col = mix(col, vec3(lum(col)), uReflect * 0.9);
 
   // ---- generator 2: thin-film rim ----
   // A narrow oil-slick edge, not a rainbow wash: the film only shows at grazing
@@ -936,8 +721,9 @@ void main(){
   float alpha = mix(1.0 - uClarity * 0.85, 1.0, rim * 0.8 * (1.0 - uSoften));
   // Janssens: the outer third melts into the background
   alpha *= 1.0 - uSoften * smoothstep(0.45, 1.0, r) * 0.92;
-  // powder (nebula) and Turrell's light have no surface at all
-  alpha *= (1.0 - uNebula) * (1.0 - uField);
-  gl_FragColor = vec4(max(col, 0.0), alpha);
+  alpha *= 1.0 - uCreature;
+  // never let a bad pixel reach the bloom
+  if (!(col.r >= 0.0 && col.g >= 0.0 && col.b >= 0.0)) col = max(base, vec3(0.0));
+  gl_FragColor = vec4(min(max(col, 0.0), vec3(12.0)), clamp(alpha, 0.0, 1.0));
 }
 `;

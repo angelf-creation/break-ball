@@ -3,11 +3,8 @@ import { store, useStore } from '../state/store';
 import { MATERIAL_BY_ID, MATERIALS, groupsWithMaterials, type MaterialGroupId, type MaterialPreset } from '../data/materials';
 import { PATTERNS } from '../data/patterns';
 import { ARTISTS } from '../data/artists';
-import { SESSIONS } from '../data/sessions';
-import { BREATH_PRESETS } from '../time/breath';
-import type { ArtistId, MaterialId, SessionId } from '../state/types';
-import { CircleButton, Option, Label, PrimaryButton, glass, glassBtn } from './ui';
-import { setBreathPreset, startSession } from './hooks';
+import type { ArtistId, MaterialId } from '../state/types';
+import { CircleButton, Option, glassBtn } from './ui';
 
 type Variant = 'row' | 'chip';
 const wrap = (v: Variant) => (v === 'row' ? 'flex flex-col gap-0.5' : 'flex gap-2 overflow-x-auto no-scrollbar pb-1');
@@ -181,72 +178,6 @@ export function ArtistPicker({ variant = 'row' }: { variant?: Variant }) {
   );
 }
 
-const TIMED = SESSIONS.filter((x) => x.id !== 'free');
-
-/** Breath preset + length, then one white "Begin" pill. During a session: End. */
-export function SessionPicker({ variant = 'row' }: { variant?: Variant }) {
-  const id = useStore((s) => s.session.id);
-  const preset = useStore((s) => s.breathPreset);
-  const len = useStore((s) => s.sessionLength);
-  const setLen = (v: SessionId) => store.set({ sessionLength: v });
-  const active = id !== 'free';
-  const chips = 'flex gap-1.5 flex-wrap';
-
-  return (
-    <div className={`flex flex-col ${variant === 'row' ? 'gap-3 px-1' : 'gap-3'}`}>
-      <div>
-        <Label className="mb-1.5 px-1">Breath</Label>
-        <div role="radiogroup" aria-label="Breathing pattern" className={chips}>
-          {BREATH_PRESETS.map((p) => (
-            <Option
-              key={p.id}
-              variant="chip"
-              role="radio"
-              aria-checked={preset === p.id}
-              active={preset === p.id}
-              hint={p.hint}
-              onClick={() => setBreathPreset(p.id)}
-              className="!px-3 !py-1.5 !text-[12px]"
-            >
-              {p.label}
-            </Option>
-          ))}
-        </div>
-      </div>
-      <div>
-        <Label className="mb-1.5 px-1">Length · minutes</Label>
-        <div role="radiogroup" aria-label="Session length" className={chips}>
-          {TIMED.map((x) => (
-            <Option
-              key={x.id}
-              variant="chip"
-              role="radio"
-              aria-checked={(active ? id : len) === x.id}
-              active={(active ? id : len) === x.id}
-              disabled={active}
-              onClick={() => setLen(x.id)}
-              className="!px-3 !py-1.5 !text-[12px] disabled:opacity-60"
-            >
-              {x.short}
-            </Option>
-          ))}
-        </div>
-      </div>
-      {active ? (
-        <button
-          type="button"
-          onClick={() => startSession('free')}
-          className={`${glass} h-10 rounded-full text-[13px] text-white/75 hover:text-white transition-colors`}
-        >
-          End session
-        </button>
-      ) : (
-        <PrimaryButton onClick={() => startSession(len)}>Begin</PrimaryButton>
-      )}
-    </div>
-  );
-}
-
 export function SoundControl({ compact = false }: { compact?: boolean }) {
   const enabled = useStore((s) => s.sound.enabled);
   const volume = useStore((s) => s.sound.volume);
@@ -256,7 +187,7 @@ export function SoundControl({ compact = false }: { compact?: boolean }) {
         type="button"
         aria-pressed={enabled}
         onClick={() => store.set((s) => ({ sound: { ...s.sound, enabled: !s.sound.enabled } }))}
-        className={`shrink-0 whitespace-nowrap flex items-center gap-2 rounded-full px-3.5 py-[7px] text-[12.5px] ${
+        className={`shrink-0 whitespace-nowrap flex items-center gap-2 tap rounded-btn px-4 py-2.5 text-[13px] ${
           enabled ? glassBtn(true) : `${glassBtn(false)} border-white/10 text-white/60 hover:text-white/90`
         }`}
       >

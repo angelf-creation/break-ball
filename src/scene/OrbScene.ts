@@ -11,8 +11,8 @@ import { MATERIAL_BY_ID, GEN_KEYS, NONE, type GeneratorMix } from '../data/mater
 import { effectiveDate, lightMood } from '../time/ceTime';
 import { breathAt, sessionElapsed } from '../time/breath';
 import { VideoSource, VIDEO_DISC } from './videoSource';
-import { makeGrowthTexture, makeRootTexture } from './growth';
-import { FractureField } from './fracture';
+import { makeRootTexture } from './growth';
+import { buildCreature, CREATURE_KEYS, type Creature, type CreatureKey } from './creatures';
 import { orbVertex, orbFragment } from './shaders/orb';
 import {
   particleVertex, particleFragment, fogVertex, fogFragment, backdropVertex, backdropFragment, ditherShader,
@@ -31,10 +31,6 @@ const FOG_LAYERS = [-1.2, -0.75, -0.38, 0, 0.38, 0.75, 1.2];
 const FOG_EXTENT = 1.85; // haze reaches this far (radius units) before it is gone
 /** how much the orb shrinks on an empty breath (session mode) */
 const BREATH_SCALE = 0.13;
-/** Turrell's palette for the light-field material */
-const TURRELL_COLS = ['#8a5f86', '#f3b38a', '#bfe5d4', '#d79aa0'].map((h) => new THREE.Color(h));
-const CAP_AXIS = new THREE.Vector3(0, 0.8, -0.6).normalize(); // keep in sync with chunks.ts
-const BELL_AXIS = new THREE.Vector3(0, 0.96, 0.28).normalize(); // keep in sync with chunks.ts
 /** rough-cut gem planes [nx, ny, nz, distance]; keep in sync with gemPlane() in chunks.ts */
 const GEM_PLANES: [number, number, number, number][] = [
   [0, 1, 0, 0.78], [0, -1, 0, 0.86], [0.9, 0.3, 0.2, 0.93], [-0.85, 0.35, 0.3, 0.9], [0.2, 0.35, 0.95, 0.93],
@@ -89,7 +85,6 @@ export class OrbScene {
   /** [inside pass, outside pass] */
   private dust: THREE.Points[];
   private nebula: THREE.Points[];
-  private droplets: THREE.Points[];
   private specks: THREE.Points[];
   private dither: ShaderPass;
   private backdrop: THREE.Mesh;
@@ -113,14 +108,13 @@ export class OrbScene {
   private orbCss = { x: -1, y: -1, r: -1 };
   private motion = 1;
   private videoOn = 0;
-  private tilt = { x: 0, y: 0, tx: 0, ty: 0 };
   /** last pointer position (-1..1, y up), smoothed; Corse's lit band follows it. Never decays, so it stays where you left it. */
   private pointer = { x: 0, y: 0.2, tx: 0, ty: 0.2 };
   private jelly = { x: 0, y: 0, vx: 0, vy: 0 };
   private disperse = 0;
   private ripples = Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, -100)); // xyz = dir * strength, w = start
   private rippleIdx = 0;
-  private drag = { active: false, lastT: 0, last: new THREE.Vector3(0, 0, 1), id: -1 };
+  private drag = { active: false, lastT: 0, last: new THREE.Vector3(0, 0, 1), id: -1, x: 0, y: 0, t: 0, onBall: false, hover: false, hx: 0, hy: 0 };
 
   private U = {
     uTime: { value: 0 },
@@ -129,14 +123,8 @@ export class OrbScene {
     uFront: { value: new THREE.Vector3(0, 0, 1) },
     uRings: { value: 0 },
     uRingFreq: { value: 5 },
-    uCap: { value: 0 },
-    uPetalShape: { value: 0 },
-    uRootShape: { value: 0 },
-    uMouldShape: { value: 0 },
     uSquash: { value: 0 },
-    uBell: { value: 0 },
     uPulse: { value: 0 },
-    uEmit: { value: 0 },
     uBreath: { value: 0.5 },
     uSession: { value: 0 },
     uRipples: { value: [] as THREE.Vector4[] },
@@ -155,26 +143,24 @@ export class OrbScene {
     uRefract: { value: 0 },
     uAbsorb: { value: 0 },
     uClarity: { value: 0 },
-    uReflect: { value: 0 },
     uCaustic: { value: 0 },
     uFilm: { value: 0 },
     uSoft: { value: 0 },
     uSpectral: { value: 0 },
-    uFacet: { value: 0 },
-    uDrop: { value: 0 },
     uGem: { value: 0 },
-    uNebula: { value: 0 },
-    uCrack: { value: 0 },
-    uCrackTex: { value: null as THREE.Texture | null },
-    uMycel: { value: 0 },
-    uMycelTex: { value: null as THREE.Texture | null },
-    uFabric: { value: 0 },
-    uField: { value: 0 },
-    uLightCol: { value: new THREE.Color('#8a5f86') },
     uOpen: { value: 0 },
     uGroupRot: { value: new THREE.Matrix3() },
-    uPetal: { value: 0 },
-    uGill: { value: 0 },
+    uViewRot: { value: new THREE.Matrix3() },
+    uInvModel: { value: new THREE.Matrix4() },
+    uCreature: { value: 0 },
+    uPrint: { value: 0 },
+    uArtTint: { value: 0 },
+    uDent: { value: new THREE.Vector4(0, 0, 1, 0) },
+    uAura: { value: new THREE.Vector4() },
+    uGrow: { value: 0 },
+    uGrowFade: { value: 1 },
+    uArmSway: { value: new THREE.Vector2() },
+    uTouchCrack: { value: Array.from({ length: 4 }, () => new THREE.Vector4(0, 0, 1, -1)) },
     uRoot: { value: 0 },
     uRootTex: { value: null as THREE.Texture | null },
     uSss: { value: 0 },
@@ -227,17 +213,14 @@ export class OrbScene {
     ...this.U,
     uFieldColor: { value: new THREE.Color() },
     uSpectralAmt: { value: 0 },
-    uArms: { value: 0 },
-    uArmSway: { value: new THREE.Vector2() },
   };
-  private armSway = 0;
-  private lastPointerX = 0;
+  private armSway = new THREE.Vector2();
   private pulseClock = 0;
-  private crackWasOn = false;
   private spring = 38;
   /** the orb's two shader materials; their defines switch generators on and off at compile time */
   private orbMats: THREE.ShaderMaterial[] = [];
   private defineKey = '';
+  private skin: THREE.Mesh[] = [];
 
   /**
    * Compile only what is in use. Every generator block in orb.ts sits inside
@@ -252,8 +235,7 @@ export class OrbScene {
     const on = (v: number) => v > 0.0005;
     const flags: Record<string, boolean> = {
       G_REFRACT: on(g.refract), G_ABSORB: on(g.absorb), G_SOFT: on(g.soft), G_CAUSTIC: on(g.caustic),
-      G_EMIT: on(g.emit), G_PETAL: on(g.petal), G_GILL: on(g.gill), G_ROOT: on(g.root), G_MYCEL: on(g.mycel),
-      G_SSS: on(g.sss), G_REFLECT: on(g.reflect), G_CRACK: on(g.crack), G_GEM: on(g.gem), G_FACET: on(g.facet),
+      G_ROOT: on(g.root), G_SSS: on(g.sss), G_GEM: on(g.gem),
       G_APERFLAT: on(f.aperFlat), G_HAZE: on(f.haze), G_PRISM: on(f.prism), G_RETRO: on(f.retro),
       G_STRIPES: on(f.stripes), G_DISC: on(f.disc) || on(f.mono), G_RESIN: on(f.resin),
     };
@@ -267,11 +249,26 @@ export class OrbScene {
       m.needsUpdate = true;
     });
   }
-  /** DLA frost texture, generated the first time a frost material is chosen */
-  /** ice: the live fracture network, created the first time ice is chosen */
-  private fracture: FractureField | null = null;
-  /** mould: DLA mycelium filaments */
-  private mycelTex: THREE.Texture | null = null;
+  /** modelled scenes, built the first time each is chosen */
+  private creatures = new Map<CreatureKey, Creature>();
+  private crackIdx = 0;
+  private growT = 0;
+  /** rotation: orientation lives in group.quaternion; spin is a world-space angular velocity (rad/s) */
+  private spin = new THREE.Vector3();
+  private idle = 99;
+  private rest = new THREE.Quaternion();
+  private fogGroup = new THREE.Group();
+  private holdW = 0;
+  private pressed = false;
+  private pressT = 0;
+  private dent = 0;
+  private artOn = 0;
+  private printOn = 0;
+  /** adaptive resolution: drops a step when frames run long */
+  private quality = 1;
+  private slow = 0.016;
+  private slowAt = 0;
+  private qualityFor: string = '';
   /** orchid: how far the bloom has opened (restarts from a bud when chosen) */
   private openT = 0;
   private rootTex: THREE.Texture | null = null;
@@ -288,7 +285,7 @@ export class OrbScene {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.domElement.style.touchAction = 'none';
     renderer.domElement.style.display = 'block';
-    renderer.domElement.setAttribute('aria-label', 'Break Ball: interactive orb. Click or drag to touch the surface.');
+    renderer.domElement.setAttribute('aria-label', 'Break Ball: interactive orb. Drag to turn it, click to touch the surface.');
     container.appendChild(renderer.domElement);
     this.renderer = renderer;
 
@@ -321,7 +318,7 @@ export class OrbScene {
       sphere,
       new THREE.ShaderMaterial({
         vertexShader: orbVertex, fragmentShader: orbFragment, uniforms: this.U,
-        side: THREE.BackSide, defines: { ORB_BACK: 1 }, transparent: true,
+        side: THREE.BackSide, defines: { ORB_BACK: 1 }, transparent: true, depthWrite: false,
       }),
     );
     const front = new THREE.Mesh(
@@ -334,6 +331,7 @@ export class OrbScene {
     back.renderOrder = 0;
     front.renderOrder = 20; // after the far wall, particles and fog inside
     this.group.add(back, front);
+    this.skin = [back, front];
     this.orbMats = [back.material as THREE.ShaderMaterial, front.material as THREE.ShaderMaterial];
 
     // Particles and fog are drawn twice: the part inside the ball before the skin
@@ -357,7 +355,6 @@ export class OrbScene {
     };
     this.dust = mkPoints(compact ? 1400 : 2800, 0, THREE.AdditiveBlending);
     this.nebula = mkPoints(compact ? 2600 : 6000, 1, THREE.AdditiveBlending);
-    this.droplets = mkPoints(compact ? 14 : 20, 3, THREE.NormalBlending);
     this.specks = mkPoints(compact ? 500 : 900, 2, THREE.AdditiveBlending);
 
     // fog slices, inside and spilled
@@ -373,10 +370,10 @@ export class OrbScene {
         mesh.renderOrder = (pass ? 21 : 4) + i;
         mesh.visible = false;
         this.fogMeshes.push(mesh);
-        this.group.add(mesh);
+        this.fogGroup.add(mesh); // haze always faces the camera: it doesn't turn with the ball
       }),
     );
-    this.scene.add(this.group);
+    this.scene.add(this.group, this.fogGroup);
 
     // post
     const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
@@ -390,9 +387,9 @@ export class OrbScene {
 
     this.disposables.push(
       sphere, fogGeo, back.material, front.material,
-      this.backdrop.geometry, backMat, this.dust[0].geometry, this.nebula[0].geometry, this.droplets[0].geometry, rt,
+      this.backdrop.geometry, backMat, this.dust[0].geometry, this.nebula[0].geometry, rt,
       this.specks[0].geometry,
-      ...[...this.dust, ...this.nebula, ...this.droplets, ...this.specks].map((p) => p.material as THREE.Material),
+      ...[...this.dust, ...this.nebula, ...this.specks].map((p) => p.material as THREE.Material),
       this.dither.material,
       ...this.fogMeshes.map((m) => m.material as THREE.Material),
     );
@@ -410,6 +407,8 @@ export class OrbScene {
     el.addEventListener('pointermove', this.onMove);
     el.addEventListener('pointerup', this.onUp);
     el.addEventListener('pointercancel', this.onUp);
+    el.addEventListener('pointerleave', this.onLeave);
+    el.addEventListener('wheel', this.onWheel, { passive: false });
     window.addEventListener('pointermove', this.onHover, { passive: true });
 
     this.raf = requestAnimationFrame(this.tick);
@@ -419,10 +418,13 @@ export class OrbScene {
 
   // ---------- layout ----------
   private layout() {
+    this.rest.setFromEuler(new THREE.Euler(-ELEV, 0, 0)); // facing the camera, which looks down a little
+    if (!this.placed) this.group.quaternion.copy(this.rest);
+    this.placed = true;
     const w = Math.max(1, this.container.clientWidth);
     const h = Math.max(1, this.container.clientHeight);
     const compact = w < 768;
-    const pr = Math.min(window.devicePixelRatio || 1, compact ? 1.5 : 1.75);
+    const pr = Math.min(window.devicePixelRatio || 1, compact ? 1.5 : 1.75) * this.quality;
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     this.renderer.domElement.style.width = `${w}px`;
@@ -435,7 +437,7 @@ export class OrbScene {
     const aspect = w / h;
     this.camera.aspect = aspect;
     const tanH = Math.tan(((FOV / 2) * Math.PI) / 180);
-    const widthShare = compact ? 0.86 : w < 1100 ? 0.5 : 0.56;
+    const widthShare = compact ? 0.8 : w < 1100 ? 0.5 : 0.56;
     const heightShare = compact ? 0.5 : 0.64;
     const dW = BASE_R / widthShare / (tanH * aspect);
     const dH = BASE_R * 1.04 / heightShare / tanH;
@@ -448,6 +450,7 @@ export class OrbScene {
     this.U.uAspect.value = aspect;
   }
 
+  private placed = false;
   private baseDist = 8;
   /** >1 pulls the camera back (smaller ball), used while the History card is open */
   private zoom = 1;
@@ -474,12 +477,12 @@ export class OrbScene {
   private tmpV = new THREE.Vector3();
   /** Orb centre + radius on screen: feeds the field's light bleed and the breath label (CSS vars). */
   private updateOrbScreen() {
-    const c = this.tmpV.set(0, 0, 0).project(this.camera);
+    const c = this.tmpV.copy(this.group.position).project(this.camera);
     const cx = c.x * 0.5 + 0.5;
     const cy = c.y * 0.5 + 0.5;
     this.U.uCenter.value.set(cx, cy);
     this.camera.updateMatrixWorld();
-    const right = this.tmpV.setFromMatrixColumn(this.camera.matrixWorld, 0).multiplyScalar(BASE_R * this.group.scale.x);
+    const right = this.tmpV.setFromMatrixColumn(this.camera.matrixWorld, 0).multiplyScalar(BASE_R * this.group.scale.x).add(this.group.position);
     const e = right.project(this.camera);
     const rr = Math.abs(e.x * 0.5 + 0.5 - cx) * this.camera.aspect; // in screen-height units
     this.U.uOrbR.value = rr;
@@ -502,41 +505,16 @@ export class OrbScene {
    */
   private radiusJS(dir: THREE.Vector3): number {
     let h = 0; // (the breath scales the group, which hitTest's inverse matrix already undoes)
-    const cap = this.U.uCap.value;
-    if (cap > 0.002) {
-      // mirrors capShape() in shaders/chunks.ts
-      const cc = dir.dot(CAP_AXIS);
-      const sm = (a: number, b: number, x: number) => {
-        const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
-        return k * k * (3 - 2 * k);
-      };
-      const th = Math.acos(Math.min(1, Math.max(-1, -cc)));
-      if (th < 0.455) h += cap * (Math.min(0.22 / Math.max(Math.sin(th), 1e-3), 1.25 / Math.max(Math.cos(th), 1e-3)) - 1);
-      else h += cap * (0.17 * Math.max(cc, 0) ** 2 + 0.05 * Math.exp(-(((cc + 0.14) / 0.1) ** 2)) - 0.55 * sm(-0.18, -0.95, cc));
-    }
-    // the larger organic shape terms (mirrors organicShape in chunks.ts; small noise lumps are skipped)
     const U = this.U;
-    const side = 1 - Math.abs(dir.z);
-    const ang = Math.atan2(dir.y, dir.x);
-    const smo = (a: number, b: number, x: number) => {
-      const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
-      return k * k * (3 - 2 * k);
-    };
-    if (U.uPetalShape.value > 0.002) {
-      // mirrors orchidOutline() in chunks.ts
-      const lobe = (at: number, w: number, len: number) => {
-        const d = Math.abs(((((ang - at + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI);
-        return len * Math.exp(-(d * d) / (w * w));
-      };
-      const best = Math.max(lobe(1.5708, 0.3, 1), lobe(3.75, 0.3, 0.92), lobe(5.68, 0.3, 0.92), lobe(0.35, 0.55, 0.88), lobe(2.79, 0.55, 0.88), lobe(4.71, 0.62, 0.8));
-      h += U.uPetalShape.value * U.uOpen.value * (0.16 * (0.3 + 0.66 * best - 0.62) * smo(0.05, 0.75, side) - 0.07 * smo(0.86, 1, dir.z));
-    }
-    if (U.uRootShape.value > 0.002) h += U.uRootShape.value * 0.035 * Math.abs(Math.cos(ang * 4)) ** 8 * smo(0.98, 0.3, dir.z);
-    if (U.uMouldShape.value > 0.002) h += U.uMouldShape.value * 0.03 * smo(0.2, 0.75, dir.z);
-    if (U.uSquash.value > 0.002) h += U.uSquash.value * (0.05 - 0.13 * Math.abs(dir.y) ** 3);
-    if (U.uDrop.value > 0.002) {
-      // mirrors dropShape() (without its small moving bulges)
-      h += U.uDrop.value * (-0.24 * Math.max(-dir.y, 0) ** 2 + 0.09 * (1 - dir.y * dir.y) - 0.07 * Math.max(dir.y, 0) ** 2);
+    const k = 1 - U.uCreature.value; // modelled scenes answer touch as a plain ball
+    if (U.uSquash.value > 0.002) {
+      // mirrors cushionShape() + dentShape() (without their small noise)
+      const ax = Math.max(Math.abs(dir.x), 1e-3), ay = Math.max(Math.abs(dir.y), 1e-3);
+      const sq2 = (ax ** 3.2 + ay ** 3.2) ** 0.625;
+      const cr = Math.min(1, Math.max(0, (ax * ay * 2 - 0.3) / 0.45));
+      const fl = dir.z / (0.66 - 0.1 * cr * cr * (3 - 2 * cr));
+      const an = Math.acos(Math.min(1, Math.max(-1, dir.x * U.uDent.value.x + dir.y * U.uDent.value.y + dir.z * U.uDent.value.z)));
+      h += U.uSquash.value * (1.06 / Math.sqrt(Math.max(sq2 + fl * fl, 1e-3)) - 1 + U.uDent.value.w * (-0.2 * Math.exp((-an * an) / 0.12) + 0.05 * Math.exp(-((an - 0.68) ** 2) / 0.045)));
     }
     if (U.uGem.value > 0.002) {
       // mirrors gemRadius(): the rough-cut polyhedron
@@ -547,18 +525,6 @@ export class OrbScene {
       }
       h += U.uGem.value * (Math.min(r1, 1.35) - 1);
     }
-    if (U.uFabric.value > 0.002) h -= U.uFabric.value * 0.045 * Math.exp(-((Math.acos(Math.max(-1, Math.min(1, dir.z))) / 0.2) ** 2));
-    if (U.uBell.value > 0.002) {
-      // mirrors bellShape() in chunks.ts
-      const c = dir.dot(BELL_AXIS);
-      const pl = U.uPulse.value;
-      h += U.uBell.value * (
-        -0.08 * Math.max(c, 0) ** 2 +
-        0.07 * Math.exp(-(((c + 0.22) / 0.1) ** 2)) * (1 - 0.7 * pl) -
-        0.5 * (1 - smo(-0.95, -0.3, c)) +
-        pl * (0.035 * Math.max(c, 0) - 0.05 * Math.exp(-(((c + 0.1) / 0.3) ** 2)))
-      );
-    }
     const c = dir.dot(this.U.uFront.value);
     if (this.form.aperFlat > 0.002) {
       // mirrors smin() in shaders/chunks.ts
@@ -566,7 +532,7 @@ export class OrbScene {
       const hh = Math.min(1, Math.max(0, 0.5 + (0.5 * (b - a)) / k));
       h += this.form.aperFlat * (b + (a - b) * hh - k * hh * (1 - hh));
     }
-    return BASE_R * (1 + h);
+    return BASE_R * (1 + h * k);
   }
 
   /** Ray-march the displaced sphere; returns the hit direction in object space. */
@@ -621,84 +587,147 @@ export class OrbScene {
   }
 
   private poke(dir: THREE.Vector3, strength: number) {
-    // Turrell's light: touching it does nothing visible (or audible); the light simply continues
-    if (this.gen.field > 0.5) return;
-    // ice: the touch point becomes a fracture origin, new cracks branch out from it
-    if (this.gen.crack > 0.5 && this.fracture) {
-      const uv = this.discUV(dir);
-      if (uv) this.fracture.addAt(uv.x, uv.y);
+    // ice: the touch point becomes the origin of a new crack plane, spreading inward
+    if (this.gen.crack > 0.5 && strength > 0.8) {
+      this.U.uTouchCrack.value[this.crackIdx].set(dir.x, dir.y, dir.z, this.simClock);
+      this.crackIdx = (this.crackIdx + 1) % this.U.uTouchCrack.value.length;
     }
     const rp = this.ripples[this.rippleIdx];
     rp.set(dir.x * strength, dir.y * strength, dir.z * strength, this.simClock);
     this.rippleIdx = (this.rippleIdx + 1) % this.ripples.length;
     this.jelly.vx -= dir.x * 2.4 * strength;
     this.jelly.vy -= dir.y * 2.4 * strength;
+    this.U.uDent.value.set(dir.x, dir.y, dir.z, this.U.uDent.value.w);
     this.disperse = Math.min(1.2, this.disperse + strength);
     this.U.uPoke.value.copy(dir);
     this.opts.onTouch?.(strength, Math.max(-1, Math.min(1, dir.x)) * 0.8);
     this.video.resumeOnGesture();
   }
 
-  /** Object-space direction -> the front-projection disc in 0..1 texture space (as orb.ts maps it). */
-  private discUV(dir: THREE.Vector3): THREE.Vector2 | null {
-    const vd = dir.clone().applyQuaternion(this.group.quaternion).transformDirection(this.camera.matrixWorldInverse);
-    const Rw = BASE_R * this.group.scale.x;
-    const k = Rw / Math.max(this.camera.position.length(), Rw * 1.5);
-    const s = 1 / Math.sqrt(1 - k * k);
-    let px = vd.x * s;
-    let py = vd.y * s;
-    const l = Math.hypot(px, py);
-    if (l > 1) {
-      px /= l;
-      py /= l;
-    }
-    return new THREE.Vector2(px * 0.5 + 0.5, py * 0.5 + 0.5);
+  /** Pixels -> radians: dragging across the ball's radius turns it by about one radian. */
+  private pxToRad(): number {
+    return 1 / Math.max(60, this.orbCss.r > 0 ? this.orbCss.r : 200);
+  }
+  private tmpQ = new THREE.Quaternion();
+  private tmpE = new THREE.Euler();
+  private lean = new THREE.Vector2();
+  private swayClock = 0;
+  private floatClock = 0;
+  private tmpAxis = new THREE.Vector3();
+  /**
+   * Turn the ball by a small screen-space movement. The rotation is a delta about the
+   * camera's own right / up axes, premultiplied onto the orientation quaternion: there
+   * are no Euler angles to clamp or flip, so it can go round any number of times.
+   */
+  private turn(dx: number, dy: number) {
+    const ang = Math.hypot(dx, dy);
+    if (ang < 1e-6) return;
+    this.tmpAxis.set(dy / ang, dx / ang, 0).applyQuaternion(this.camera.quaternion);
+    this.tmpQ.setFromAxisAngle(this.tmpAxis, ang);
+    this.group.quaternion.premultiply(this.tmpQ).normalize();
+  }
+  /** Add angular velocity (rad/s) from a screen-space movement. */
+  private push(vx: number, vy: number) {
+    this.tmpAxis.set(vy, vx, 0).applyQuaternion(this.camera.quaternion);
+    this.spin.add(this.tmpAxis);
+    const max = 5;
+    if (this.spin.length() > max) this.spin.setLength(max);
   }
 
   private onDown = (e: PointerEvent) => {
+    if (this.drag.active) return; // a second finger must not steal the drag
     this.video.resumeOnGesture();
     const hit = this.hitTest(e.clientX, e.clientY);
-    this.setTiltFrom(e.clientX, e.clientY);
-    if (!hit) return;
     this.renderer.domElement.setPointerCapture(e.pointerId);
-    this.drag.active = true;
-    this.drag.id = e.pointerId;
-    this.drag.lastT = this.clock;
-    this.drag.last.copy(hit);
+    const d = this.drag;
+    d.active = true;
+    d.id = e.pointerId;
+    d.lastT = this.clock;
+    d.x = e.clientX;
+    d.y = e.clientY;
+    d.t = e.timeStamp;
+    d.onBall = !!hit;
+    this.spin.multiplyScalar(0.15); // catching the ball stops it
+    this.idle = 0;
+    if (!hit) return;
+    this.pressed = true;
+    this.pressT = 0;
+    d.last.copy(hit);
     this.poke(hit, 1);
   };
 
   private onMove = (e: PointerEvent) => {
-    if (!this.drag.active || e.pointerId !== this.drag.id) return;
+    const d = this.drag;
+    if (!d.active || e.pointerId !== d.id) return;
+    const k = this.pxToRad();
+    const dx = (e.clientX - d.x) * k;
+    const dy = (e.clientY - d.y) * k;
+    const dtm = Math.max(0.004, (e.timeStamp - d.t) / 1000);
+    d.x = e.clientX;
+    d.y = e.clientY;
+    d.t = e.timeStamp;
+    this.idle = 0;
+    this.turn(dx, dy);
+    // remember the hand's speed, so letting go carries on from it
+    const s = 1 - Math.exp(-dtm * 18);
+    this.tmpAxis.set(dy / dtm, dx / dtm, 0).applyQuaternion(this.camera.quaternion);
+    this.spin.lerp(this.tmpAxis, s);
+    if (!d.onBall) return;
     const hit = this.hitTest(e.clientX, e.clientY);
     if (!hit) return;
-    const dist = hit.angleTo(this.drag.last); // great-circle distance (radians)
-    const dtSince = this.clock - this.drag.lastT;
-    if (dist > 0.07 || (dtSince > 0.16 && dist > 0.01)) {
-      const speed = Math.min(1, dist / Math.max(dtSince, 0.016) / 3);
-      this.poke(hit, 0.35 + 0.35 * speed);
-      this.drag.last.copy(hit);
-      this.drag.lastT = this.clock;
+    const dist = hit.angleTo(d.last);
+    const since = this.clock - d.lastT;
+    if (since > 0.22 && Math.hypot(dx, dy) > 0.004) {
+      this.poke(hit, 0.3 + 0.25 * Math.min(1, Math.hypot(dx, dy) / dtm / 4) + 0.05 * Math.min(1, dist));
+      d.last.copy(hit);
+      d.lastT = this.clock;
     }
   };
 
   private onUp = (e: PointerEvent) => {
-    if (e.pointerId === this.drag.id) {
-      this.drag.active = false;
-      this.drag.id = -1;
-    }
+    const d = this.drag;
+    if (e.pointerId !== d.id) return;
+    // held still before letting go: no throw
+    if (e.timeStamp - d.t > 90) this.spin.multiplyScalar(0.1);
+    if (this.spin.length() > 4) this.spin.setLength(4);
+    d.active = false;
+    d.id = -1;
+    d.hover = false;
+    this.pressed = false;
+  };
+
+  private onLeave = () => {
+    this.drag.hover = false;
+  };
+
+  /** Trackpad: two-finger scroll turns the ball (pinch is left alone). */
+  private onWheel = (e: WheelEvent) => {
+    if (e.ctrlKey) return;
+    e.preventDefault();
+    const unit = e.deltaMode === 1 ? 16 : 1;
+    const k = this.pxToRad() * 2.2;
+    const lim = (v: number) => Math.max(-60, Math.min(60, v * unit));
+    this.push(-lim(e.deltaX) * k, -lim(e.deltaY) * k);
+    this.idle = 0;
   };
 
   private onHover = (e: PointerEvent) => {
     this.pointer.tx = (e.clientX / window.innerWidth) * 2 - 1;
     this.pointer.ty = -((e.clientY / window.innerHeight) * 2 - 1);
-    if (e.pointerType === 'mouse') this.setTiltFrom(e.clientX, e.clientY);
+    if (e.pointerType !== 'mouse') return;
+    const d = this.drag;
+    const over = e.target === this.renderer.domElement;
+    // moving the mouse over the scene (no button) nudges the ball, so it follows gently
+    if (over && d.hover && !d.active) {
+      const k = this.pxToRad() * (store.get().reducedMotion ? 0.25 : 0.9);
+      const lim = (v: number) => Math.max(-40, Math.min(40, v));
+      this.push(lim(e.clientX - d.hx) * k, lim(e.clientY - d.hy) * k);
+      this.idle = Math.min(this.idle, 1);
+    }
+    d.hover = over;
+    d.hx = e.clientX;
+    d.hy = e.clientY;
   };
-
-  private setTiltFrom(x: number, y: number) {
-    this.tilt.tx = (x / window.innerWidth) * 2 - 1;
-    this.tilt.ty = (y / window.innerHeight) * 2 - 1;
-  }
 
   // ---------- time / light ----------
   private updateMood(snap = false) {
@@ -731,13 +760,35 @@ export class OrbScene {
   // ---------- frame ----------
   private tmpC = new THREE.Color();
   private tmpC2 = new THREE.Color();
+  private tmpM = new THREE.Matrix4();
 
   private tick = (now: number) => {
     this.raf = requestAnimationFrame(this.tick);
     const dt = this.last ? Math.min(0.05, Math.max(0, (now - this.last) / 1000)) : 0.016;
+    const rawDt = this.last ? Math.min(0.2, (now - this.last) / 1000) : 0.016;
     this.last = now;
+    // frames running long: lower the render resolution a step (a new material starts at full again)
+    if (store.get().material !== this.qualityFor) {
+      this.qualityFor = store.get().material;
+      this.slowAt = now;
+      this.slow = 0.016;
+      if (this.quality < 1) {
+        this.quality = 1;
+        this.layout();
+      }
+    }
+    if (document.hasFocus() && now - this.slowAt > 2500) {
+      this.slow = damp(this.slow, rawDt, 1.2, rawDt);
+      const q = this.slow > 0.03 ? Math.max(0.5, this.quality - 0.15) : this.quality;
+      if (q !== this.quality) {
+        this.quality = q;
+        this.slowAt = now;
+        this.layout();
+      }
+    }
     const s = store.get();
     const reduced = s.reducedMotion;
+    const U = this.U;
     const artist = ARTIST_BY_ID[s.artist];
 
     // material / pattern / form crossfades (weights stay normalised)
@@ -804,7 +855,7 @@ export class OrbScene {
     const j = this.jelly;
     // spring stiffness per material: pillow's slow cushioned bounce, mercury's quick settle
     this.spring = sp > 0 ? sp : 38;
-    const kS = this.spring, cS = 3.2 * Math.sqrt(kS / 38);
+    const kS = this.spring, cS = (3.2 + 10 * this.gen.sss) * Math.sqrt(kS / 38); // the pillow never bounces
     j.vx += (-kS * j.x - cS * j.vx) * simDt;
     j.vy += (-kS * j.y - cS * j.vy) * simDt;
     j.x += j.vx * simDt;
@@ -817,7 +868,7 @@ export class OrbScene {
     {
       const h = this.viewH;
       const active = s.session.id !== 'free';
-      const topPad = s.isCompact ? 68 : 80;
+      const topPad = s.isCompact ? 140 : 80;
       let bottomPad = s.uiInsetBottom + (s.isCompact ? 16 : 24);
       if (active) bottomPad += s.isCompact ? 40 : 0; // the session timer row sits above the phone's bottom stack
       if (!s.isCompact) bottomPad = Math.max(bottomPad, active ? 150 : topPad); // keep it centred on desktop
@@ -839,23 +890,56 @@ export class OrbScene {
       this.applyViewOffset();
     }
 
-    // tilt / parallax
-    const tiltAmt = reduced ? 0.04 : 0.13;
-    if (!this.drag.active && s.isCompact) {
-      this.tilt.tx *= Math.exp(-dt * 0.6);
-      this.tilt.ty *= Math.exp(-dt * 0.6);
+    // ---- rotation ----
+    // Orientation is a quaternion, changed only by small deltas. While a hand is on it the
+    // pointer turns it directly; otherwise its angular velocity carries on, damps smoothly,
+    // and after a few idle seconds the ball drifts back toward facing you, swaying.
+    this.idle += dt;
+    const still = reduced ? 0.25 : this.motion;
+    if (!this.drag.active) {
+      const sp = this.spin.length();
+      if (sp > 1e-4) {
+        this.tmpAxis.copy(this.spin).divideScalar(sp);
+        this.tmpQ.setFromAxisAngle(this.tmpAxis, sp * dt);
+        this.group.quaternion.premultiply(this.tmpQ);
+      }
+      this.spin.multiplyScalar(Math.exp(-dt * 1.15));
+      const back = Math.min(1, Math.max(0, (this.idle - 4) / 4));
+      if (back > 0) {
+        const c = this.swayClock += dt * back * still * (0.45 + 0.55 * this.pace);
+        const amt = reduced ? 0.12 : 1;
+        this.tmpE.set(-ELEV + 0.11 * Math.sin(c * 0.31) * amt, 0.42 * Math.sin(c * 0.23) * amt, 0.06 * Math.sin(c * 0.19 + 1) * amt);
+        this.tmpQ.setFromEuler(this.tmpE);
+        this.group.quaternion.slerp(this.tmpQ, 1 - Math.exp(-dt * 0.5 * back));
+      }
+      this.group.quaternion.normalize();
     }
-    this.tilt.x = damp(this.tilt.x, this.tilt.ty * tiltAmt, 2.2, dt);
-    this.tilt.y = damp(this.tilt.y, this.tilt.tx * tiltAmt, 2.2, dt);
-    const sway = reduced ? 0 : 0.018 * this.motion;
-    this.group.rotation.x = this.tilt.x + Math.sin(this.clock * 0.21) * sway;
-    this.group.rotation.z = -this.tilt.y + Math.cos(this.clock * 0.17) * sway;
-    this.group.rotation.y = this.patternTime * 0.01;
+    // baseline motion: a slow float and a breath of its own (the pillow lies heavier)
+    const heavy = 1 - 0.85 * this.gen.sss;
+    const lively = (reduced ? 0.2 : 1) * heavy * (0.4 + 0.6 * this.motion);
+    const bt = this.floatClock += dt * (0.4 + 0.6 * this.pace);
+    this.group.position.set(0.035 * Math.sin(bt * 0.29) * lively, 0.06 * Math.sin(bt * 0.47) * lively - 0.03 * this.gen.sss * this.dent, 0);
+    const own = 1 + 0.016 * Math.sin(bt * 0.62) * lively * (1 - this.sessionW);
     // the orb scales with the breath (cosine-eased in breath.ts): full on inhale/hold, smaller at rest
-    this.group.scale.setScalar(1 - this.sessionW * (1 - this.breath) * BREATH_SCALE);
+    this.group.scale.setScalar(own * (1 - this.sessionW * (1 - this.breath) * BREATH_SCALE));
+    this.fogGroup.position.copy(this.group.position);
+    this.fogGroup.scale.copy(this.group.scale);
+    this.fogGroup.quaternion.copy(this.rest);
+
+    // HOLD: while the breath is held (or the ball is held down) the light around it swells
+    this.pressT = this.pressed ? this.pressT + dt : 0;
+    let holdTarget = this.pressT > 0.35 ? 1 : 0;
+    if (active) {
+      const b = breathAt(sessionElapsed(s.session.startedAt), s.breathPreset);
+      if (b.phase === 'hold') holdTarget = 1;
+      else if (b.phase === 'inhale') holdTarget = Math.max(holdTarget, 0.55 * b.value ** 5); // leans in before the hold
+    }
+    this.holdW = damp(this.holdW, holdTarget, holdTarget > this.holdW ? 1.5 : 0.75, dt);
+    // the pillow's hollow: sinks quickly under the hand, fills out slowly
+    this.dent = damp(this.dent, this.pressed ? 1 : 0, this.pressed ? 6 : 0.9, dt);
+    U.uDent.value.w = Math.max(this.dent, Math.min(1, this.disperse * 0.5) * (this.pressed ? 1 : 0.4));
 
     // ---- write uniforms ----
-    const U = this.U;
     const f = this.form;
     U.uTime.value = this.patternTime;
     U.uClock.value = this.simClock;
@@ -887,7 +971,9 @@ export class OrbScene {
     U.uSoften.value = f.soften;
     // camera direction in the ball's own frame, so the Turrell window always faces the viewer
     this.group.updateMatrixWorld();
-    U.uFront.value.copy(this.camera.position).sub(this.target).applyQuaternion(this.group.quaternion.clone().invert()).normalize();
+    U.uGroupRot.value.setFromMatrix4(this.tmpM.makeRotationFromQuaternion(this.group.quaternion));
+    U.uViewRot.value.setFromMatrix4(this.camera.matrixWorldInverse).multiply(U.uGroupRot.value);
+    U.uFront.value.copy(this.camera.position).sub(this.group.position).applyQuaternion(this.group.quaternion.clone().invert()).normalize();
     U.uBreath.value = this.breath;
     U.uSession.value = this.sessionW;
     U.uRippleParams.value.set(rk, rs, rd);
@@ -900,55 +986,51 @@ export class OrbScene {
     U.uRefract.value = g.refract;
     U.uAbsorb.value = g.absorb;
     U.uClarity.value = g.clarity;
-    U.uReflect.value = g.reflect;
     U.uCaustic.value = g.caustic;
     U.uFilm.value = g.film;
     U.uSoft.value = g.soft;
     U.uSpectral.value = g.spectral;
-    U.uFacet.value = g.facet;
     this.syncDefines();
-    U.uDrop.value = g.drop;
     U.uGem.value = g.gem;
-    U.uNebula.value = g.nebula;
-    U.uCrack.value = g.crack;
-    U.uMycel.value = g.mycel;
-    U.uFabric.value = g.fabric;
-    U.uField.value = g.field;
-    // ice: grow the fractures (created on first use; started over when ice is chosen again)
-    if (g.crack > 0.001) {
-      if (!this.fracture) {
-        this.fracture = new FractureField();
-        this.disposables.push(this.fracture);
+    // modelled scenes: build on first use, crossfade with the skin
+    let creature = 0;
+    for (const key of CREATURE_KEYS) {
+      const w = g[key];
+      let c = this.creatures.get(key);
+      if (!c && w > 0.01) {
+        c = buildCreature(key, U, s.isCompact);
+        // unit = radius; a wrapper-free group, so its own offset / scale are in radii
+        c.group.scale.multiplyScalar(BASE_R);
+        c.group.position.multiplyScalar(BASE_R);
+        this.creatures.set(key, c);
+        this.group.add(c.group);
       }
-      this.fracture.step(dt, this.pace);
-    } else if (this.fracture && g.crack < 0.001 && this.crackWasOn) this.fracture.reset();
-    this.crackWasOn = g.crack > 0.001;
-    U.uCrackTex.value = this.fracture?.texture ?? null;
-    // mould: mycelium filaments from the DLA growth generator
-    if (g.mycel > 0.001 && !this.mycelTex) {
-      this.mycelTex = makeGrowthTexture('centre', { particles: 9000 });
-      this.disposables.push(this.mycelTex);
+      if (!c) continue;
+      c.setWeight(Math.min(1, w * 1.02));
+      creature += w;
+      if (w > 0.002 && (key === 'nebula' || key === 'crack')) {
+        c.group.updateMatrixWorld(true);
+        U.uInvModel.value.copy(c.group.matrixWorld).invert();
+      }
     }
-    U.uMycelTex.value = this.mycelTex;
+    U.uCreature.value = Math.min(1, creature);
+    this.skin.forEach((m) => (m.visible = creature < 0.985));
+    this.artOn = damp(this.artOn, s.artist === 'default' ? 0 : 1, 1.6, dt);
+    U.uArtTint.value = this.artOn;
+    this.printOn = damp(this.printOn, s.artist === 'default' && s.pattern === 'opcell' ? 0 : 1, 1.6, dt);
+    U.uPrint.value = this.printOn;
     // orchid: the bloom unfurls from a closed bud over ~9 s
     if (g.petal > 0.5) this.openT = Math.min(1, this.openT + (dt * Math.max(this.pace, 0.5)) / 9);
     else if (g.petal < 0.02) this.openT = 0;
     U.uOpen.value = this.openT;
-    // Turrell: the field drifts through deep mauve, warm apricot, pale seafoam, dusty rose (~4 min each)
-    {
-      const cols = TURRELL_COLS;
-      const ph = (((this.clock / 240) % cols.length) + cols.length) % cols.length;
-      const i0 = Math.floor(ph);
-      const k = ph - i0;
-      const e = k * k * (3 - 2 * k);
-      U.uLightCol.value.copy(cols[i0]).lerp(cols[(i0 + 1) % cols.length], e);
-    }
-    U.uPetal.value = g.petal;
-    U.uGill.value = g.gill;
-    U.uCap.value = g.gill;
-    U.uPetalShape.value = g.petal;
-    U.uRootShape.value = g.root;
-    U.uMouldShape.value = g.mycel;
+    // roots: the network creeps out over ~26 s, rests, fades and starts again
+    if (g.root > 0.02) {
+      this.growT += dt * (0.35 + 0.65 * this.pace) * (reduced ? 0.5 : 1);
+      const ph = this.growT % 46;
+      const k = Math.min(1, ph / 26);
+      U.uGrow.value = Math.max(0.06, 1 - (1 - k) ** 1.6);
+      U.uGrowFade.value = Math.min(1, ph / 1.5) * (1 - Math.min(1, Math.max(0, (ph - 41) / 4.5)));
+    } else this.growT = 0;
     U.uSquash.value = g.sss;
     U.uRoot.value = g.root;
     U.uSss.value = g.sss;
@@ -970,7 +1052,24 @@ export class OrbScene {
     U.uLightInt.value = this.lightInt;
     U.uAmbient.value.copy(this.ambient);
     const el = this.moodTarget.elevation;
-    U.uLightDir.value.set(-0.45, 0.6 + Math.max(0, el) / 50, 0.35);
+    // the key light circles slowly and leans with the ball's own movement
+    {
+      const a = this.floatClock * 0.16;
+      const sx = Math.max(-0.5, Math.min(0.5, this.spin.y * 0.18));
+      const sy = Math.max(-0.4, Math.min(0.4, -this.spin.x * 0.15));
+      this.lean.x = damp(this.lean.x, sx, 1.5, dt);
+      this.lean.y = damp(this.lean.y, sy, 1.5, dt);
+      const k = reduced ? 0.2 : 1;
+      U.uLightDir.value.set(-0.45 + 0.55 * Math.sin(a) * k + this.lean.x, 0.6 + Math.max(0, el) / 50 + this.lean.y, 0.4 + 0.3 * Math.cos(a) * k);
+      const br = this.sessionW * this.breath;
+      const dimmed = 1 - 0.7 * Math.max(g.emit, g.nebula, g.petal, g.gill);
+      U.uAura.value.set(
+        0.75 * Math.cos(a * 1.3) * k + this.lean.x * 1.2,
+        0.5 * Math.sin(a * 0.9) * k + this.lean.y * 1.2,
+        (0.045 + 0.03 * br + 0.02 * Math.min(1, this.spin.length())) * dimmed,
+        this.holdW,
+      );
+    }
     const ganz = this.pat[3];
     U.uGanz.value = ganz;
     U.uDisperse.value = this.disperse;
@@ -984,27 +1083,24 @@ export class OrbScene {
         p.visible = amt > 0.01;
       });
     setPts(this.dust, g.dust);
-    setPts(this.nebula, g.nebula);
-    setPts(this.droplets, g.drop);
+    setPts(this.nebula, g.nebula * 0.3);
     setPts(this.specks, g.specks);
     // medusa: the bell contracts every few seconds (quick squeeze, slow release), paced
-    U.uEmit.value = g.emit;
-    U.uBell.value = g.emit;
     if (g.emit > 0.001) {
       this.pulseClock += dt * this.pace;
-      const ph = (this.pulseClock % 5.5) / 5.5;
-      const squeeze = ph < 0.22 ? Math.sin((ph / 0.22) * Math.PI * 0.5) : Math.max(0, 1 - (ph - 0.22) / 0.78);
+      const ph = (this.pulseClock % 2.8) / 2.8; // after the recording: a squeeze about every 2-3 s
+      const squeeze = ph < 0.3 ? Math.sin((ph / 0.3) * Math.PI * 0.5) : Math.max(0, 1 - (ph - 0.3) / 0.7);
       U.uPulse.value = squeeze * squeeze * (3 - 2 * squeeze);
-      // the arms trail the pointer's motion: they swing against it, then drift back
-      const vx = (this.pointer.x - this.lastPointerX) / Math.max(dt, 1e-3);
-      this.armSway = damp(this.armSway, Math.max(-1.5, Math.min(1.5, -vx * 0.25 + this.pointer.x * 0.15)), 0.9, dt);
+      // the arms lag behind the ball's turning, then drift back
+      this.armSway.x = damp(this.armSway.x, Math.max(-1.2, Math.min(1.2, this.spin.y * 0.6)), 0.9, dt);
+      this.armSway.y = damp(this.armSway.y, Math.max(-1.2, Math.min(1.2, this.spin.x * 0.6)), 0.9, dt);
+      U.uArmSway.value.copy(this.armSway);
+      const m = this.creatures.get('emit');
+      if (m) m.group.position.y = BASE_R * (0.2 + 0.06 * U.uPulse.value);
     }
-    this.lastPointerX = this.pointer.x;
-    this.backU.uArms.value = g.emit;
-    this.backU.uArmSway.value.set(this.armSway, 0);
 
     // generator 5: volumetric scatter
-    const fogAmt = Math.min(1, Math.max(g.scatter, f.haze * 0.85, g.nebula * 0.9));
+    const fogAmt = Math.min(1, Math.max(g.scatter, f.haze * 0.85));
     U.uFogAmt.value = fogAmt;
     this.paletteJS(0.35 + this.patternTime * 0.008, this.tmpC);
     // haze is greyed toward white, except in Janssens' coloured-light mode where it keeps its colour
@@ -1033,9 +1129,9 @@ export class OrbScene {
     U.uFieldTime.value = this.fieldTime;
     // the deep sea: bioluminescence looks best in the dark, so the field dims under medusa
     // deep space / deep sea: the field dims for the nebula and the medusa
-    U.uFieldLevel.value = (1 - 0.75 * g.emit) * (1 - 0.85 * g.nebula) * (0.034 + 0.026 * f.glow / 0.38) * (0.55 + 0.45 * this.lightInt) * (1 - ganz * 0.5);
+    U.uFieldLevel.value = (1 - 0.75 * Math.max(g.emit, g.petal, g.gill, g.facet * 0.6)) * (1 - 0.85 * g.nebula) * (0.034 + 0.026 * f.glow / 0.38) * (0.55 + 0.45 * this.lightInt) * (1 - ganz * 0.5);
     this.paletteJS(this.patternTime * 0.03 + 0.4, U.uBleed.value).multiply(lightK);
-    U.uBleedAmt.value = 0.055 + f.glow * 0.12 + this.sessionW * (0.02 + 0.04 * this.breath) + fogAmt * 0.03;
+    U.uBleedAmt.value = (0.055 + f.glow * 0.12) * (1 - 0.6 * Math.max(g.emit, g.nebula, g.petal, g.gill)) + this.sessionW * (0.02 + 0.04 * this.breath) + fogAmt * 0.03 + this.holdW * 0.05;
     this.updateOrbScreen();
 
     this.paletteJS(this.patternTime * 0.03 + 0.125, this.tmpC);
@@ -1044,12 +1140,7 @@ export class OrbScene {
       .multiplyScalar(0.85)
       .multiply(this.tmpC2.setRGB(1, 1, 1).lerp(this.lightColor, 0.38).multiplyScalar(this.lightInt).add(this.ambient));
 
-    this.bloom.strength = 0.4 - ganz * 0.22 - this.sessionW * 0.1 + f.disc * 0.12 + U.uBloom.value * 0.3;
-    // Turrell's light: bloom at maximum, threshold near zero, so no edge survives
-    // (as wide and soft as it goes, but held below the point where the colour turns to white)
-    this.bloom.strength += g.field * 0.3;
-    this.bloom.threshold = 0.72 - 0.5 * g.field;
-    this.bloom.radius = 0.55 + 0.45 * g.field;
+    this.bloom.strength = 0.4 - ganz * 0.22 - this.sessionW * 0.1 + f.disc * 0.12 + U.uBloom.value * 0.3 + this.holdW * 0.06;
     U.uBleedAmt.value += U.uBloom.value * 0.14;
 
     this.composer.render(dt);
@@ -1064,6 +1155,9 @@ export class OrbScene {
     el.removeEventListener('pointermove', this.onMove);
     el.removeEventListener('pointerup', this.onUp);
     el.removeEventListener('pointercancel', this.onUp);
+    el.removeEventListener('pointerleave', this.onLeave);
+    el.removeEventListener('wheel', this.onWheel);
+    this.creatures.forEach((c) => c.dispose());
     window.removeEventListener('pointermove', this.onHover);
     this.video.dispose();
     this.disposables.forEach((d) => d.dispose());

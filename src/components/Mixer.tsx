@@ -55,6 +55,8 @@ export function SoundPanel() {
         <Slider k="waves" label="Waves" />
         <Slider k="forest" label="Forest" />
         <Slider k="birdsong" label="Birdsong" />
+        <Slider k="fire" label="Crackling fire" />
+        <Slider k="night" label="Night forest" />
       </section>
       <section>
         <Label className="mb-1">Frequencies</Label>
@@ -62,8 +64,8 @@ export function SoundPanel() {
         <Slider k="tone136" label="Pure tone · 136.1 Hz" />
         <Slider k="binaural" label="Binaural · 6 Hz difference" note="Needs headphones: each ear hears a slightly different tone." />
       </section>
-      <button type="button" onClick={resetMix} className="self-start text-[11px] text-white/40 hover:text-white/75 underline-offset-2 hover:underline">
-        Reset levels
+      <button type="button" onClick={resetMix} className="tap w-full rounded-btn border border-white/30 bg-white/10 h-11 text-[13px] font-bold text-white">
+        Reset level
       </button>
     </div>
   );

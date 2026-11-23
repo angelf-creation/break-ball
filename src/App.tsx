@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { SceneCanvas } from './components/SceneCanvas';
 import { HUD } from './components/HUD';
-import { useAudioSync, useEnvironmentSync, useSessionClock } from './components/hooks';
+import { useAudioSync, useEnvironmentSync, useSessionClock, useWelcome } from './components/hooks';
 import { AudioEngine } from './audio/AudioEngine';
 import { store } from './state/store';
 
@@ -15,6 +15,7 @@ export default function App() {
   useEnvironmentSync();
   useAudioSync(audio);
   useSessionClock(audio);
+  useWelcome();
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-void text-white/80 font-sans antialiased select-none">

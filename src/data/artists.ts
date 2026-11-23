@@ -42,12 +42,12 @@ export const ARTISTS: Artist[] = [
     id: 'default',
     name: 'Default',
     label: 'Default',
-    dates: 'Your animation · Op-Art lineage',
+    dates: 'A calming pause, for everyone',
     palette: ['#b8f46a', '#6ef0c4', '#7f8cff', '#ff4fa8'],
     form: base,
     history:
-      'The vessel plays your animation: a curved cellular dome inside a glossy sphere. Op-Art painters such as Bridget Riley and Victor Vasarely used repetition and contrast so that still surfaces seem to move. MoMA’s 1965 exhibition The Responsive Eye brought the movement wide attention.',
-    inOrb: 'A glossy sphere with your animation projected onto the face turned toward you, its far side glimpsed dimly through the skin.',
+      'Break Ball started as a personal animation study that grew over time with one simple goal: making a calming pause accessible to everyone, for free. Whether you’re burned out by screens, job searching, or heavy projects—even if you don’t call it “meditation”—let the sound and kinetic motion help quiet the noise and switch off a stressed brain.',
+    inOrb: 'A glossy sphere with your animation wrapped around it: drag to turn it all the way round, with its far side glimpsed dimly through the skin.',
   },
   {
     id: 'turrell',

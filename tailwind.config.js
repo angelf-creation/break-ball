@@ -11,7 +11,7 @@ export default {
         display: ['Laginchy', 'ui-serif', 'Georgia', 'serif'],
       },
       transitionDuration: { 1500: '1500ms', 2000: '2000ms' },
-      borderRadius: { squircle: '32px' },
+      borderRadius: { panel: '12px', btn: '7px' },
     },
   },
   plugins: [],

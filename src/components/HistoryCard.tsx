@@ -43,10 +43,10 @@ export function HistoryCard({ inline = false }: { inline?: boolean }) {
       aria-modal="false"
       aria-label={`History: ${a.name}`}
       aria-hidden={!show}
-      className={`${glass} rounded-squircle transition-all ease-out ${
+      className={`${glass} rounded-panel transition-all ease-out ${
         inline
-          ? `overflow-hidden duration-500 ${show ? 'max-h-[60vh] px-5 py-5 opacity-100' : 'max-h-0 p-0 opacity-0 border-transparent pointer-events-none'}`
-          : `absolute z-20 px-7 py-6 duration-700 left-1/2 -translate-x-1/2 bottom-6 w-[min(520px,calc(100vw-560px))] min-w-[340px] ${
+          ? `overflow-hidden duration-500 ${show ? 'max-h-[60vh] overflow-y-auto px-6 py-6 opacity-100' : 'max-h-0 p-0 opacity-0 border-transparent pointer-events-none'}`
+          : `absolute z-20 px-8 py-7 duration-700 left-1/2 -translate-x-1/2 bottom-6 w-[min(520px,calc(100vw-560px))] min-w-[340px] ${
               show ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3 pointer-events-none'
             }`
       }`}
@@ -58,7 +58,7 @@ export function HistoryCard({ inline = false }: { inline?: boolean }) {
           <div className="text-[11px] text-white/40 mt-0.5">{a.dates}</div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="flex h-6 w-14 overflow-hidden rounded-full ring-1 ring-white/15" aria-hidden>
+          <span className="flex h-6 w-14 overflow-hidden rounded ring-1 ring-white/15" aria-hidden>
             {a.palette.map((c) => (
               <span key={c} className="flex-1" style={{ background: c }} />
             ))}

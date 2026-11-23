@@ -6,7 +6,7 @@ ${NOISE}
 ${SURFACE}
 ${LOOK}
 attribute vec4 aSeed; // x, y in the unit disc, then two randoms
-uniform float uKind; // 0 dust, 1 nebula (powder), 2 bioluminescent specks (medusa), 3 mercury droplets
+uniform float uKind; // 0 dust, 1 nebula (space), 2 bioluminescent specks (medusa)
 uniform float uAmt;
 uniform float uDisperse;
 uniform vec3 uPoke; // last hit direction (object space)
@@ -47,15 +47,6 @@ void main(){
     q = dir * rad + vec3(sw, sw.x * 0.5);
   }
   if (kind > 1.5 && kind < 2.5) q = normalize(q + vec3(1e-3)) * (1.05 + 0.75 * fract(aSeed.w * 5.3));
-  float drop = 0.0;
-  if (kind > 2.5){
-    // mercury: droplets bud from the surface, pinch off, drift out and fall back in
-    vec3 dir = normalize(vec3(p.x, aSeed.z * 1.4 - 0.5, p.y) + vec3(1e-3));
-    float cyc = sin(t * (0.22 + 0.2 * aSeed.w) + aSeed.z * 31.0);
-    drop = smoothstep(0.15, 0.9, cyc); // 0 = merged back in, 1 = fully out
-    q = dir * (0.93 + 0.4 * drop + 0.25 * uDisperse * fract(aSeed.w * 9.1));
-  }
-
   // a touch pushes things away from the hit point (nebula: scatters, then regroups)
   vec3 dq = q - uPoke * 0.9;
   float push = uDisperse * exp(-length(dq) * (kind > 0.5 && kind < 1.5 ? 1.6 : 3.0));
@@ -73,18 +64,16 @@ void main(){
   vec3 pos = q * orbR();
   vec4 mv = modelViewMatrix * vec4(pos, 1.0);
   gl_Position = projectionMatrix * mv;
-  float size = kind > 2.5 ? (6.0 + aSeed.w * 7.0) * (0.35 + 0.65 * drop)
-             : kind > 0.5 && kind < 1.5 ? (1.6 + aSeed.w * 4.2)
+  float size = kind > 0.5 && kind < 1.5 ? (1.6 + aSeed.w * 4.2)
              : (1.1 + aSeed.w * 2.0);
   gl_PointSize = size * uPixelRatio * uAmt * (9.5 / -mv.z);
   if (passW < 0.01) gl_PointSize = 0.0;
   vAlpha = uAmt * passW * far * (0.3 + 0.7 * fract(aSeed.w * 13.1));
   vCol = mix(uLightColor, palette(aSeed.w * 2.0), 0.45) * 1.1;
   if (kind > 0.5 && kind < 1.5){
-    // Hubble colours: cold blues outside, warm ochre in the dense heart, a few white stars
-    float core = 1.0 - smoothstep(0.1, 0.9, length(q));
-    vCol = mix(vec3(0.25, 0.45, 1.0), vec3(1.0, 0.68, 0.32), core) * (0.7 + 0.6 * fract(aSeed.w * 4.7));
-    if (fract(aSeed.w * 91.7) > 0.985) vCol = vec3(1.4);
+    // loose stars drifting off the ball: fine, white, a few of them bright
+    vCol = mix(vec3(0.8, 0.9, 1.0), vec3(1.0, 0.95, 0.88), fract(aSeed.w * 4.7));
+    gl_PointSize *= 0.5;
     vAlpha = uAmt * passW * far * (0.55 + 0.45 * fract(aSeed.w * 13.1));
   }
   if (kind > 1.5 && kind < 2.5){
@@ -93,7 +82,6 @@ void main(){
     gl_PointSize *= 0.8 + 1.2 * min(1.0, push * 6.0 + twinkle);
     vCol = mix(vec3(0.2, 1.0, 0.85), vec3(0.35, 0.6, 1.0), fract(aSeed.w * 3.1)) * 1.4;
   }
-  if (kind > 2.5) vAlpha = uAmt * passW * step(0.05, drop);
 }
 `;
 
@@ -104,18 +92,6 @@ varying float vKind;
 void main(){
   vec2 c = gl_PointCoord - 0.5;
   float d = length(c);
-  if (vKind > 2.5){
-    // a tiny chrome sphere: dark band at its horizon, bright sky above, a hot highlight
-    if (d > 0.5) discard;
-    vec3 n = vec3(c * 2.0 * vec2(1.0, -1.0), sqrt(max(1.0 - 4.0 * d * d, 0.0)));
-    float y = n.y;
-    vec3 col = mix(vec3(0.08), vec3(1.02), smoothstep(-0.3, 0.5, y));
-    col *= 1.0 - 0.85 * exp(-pow((y - 0.05) / 0.12, 2.0));
-    col += vec3(1.0) * pow(max(dot(n, normalize(vec3(-0.4, 0.6, 0.7))), 0.0), 60.0) * 1.5;
-    float edgeA = 1.0 - smoothstep(0.46, 0.5, d);
-    gl_FragColor = vec4(col, vAlpha * edgeA);
-    return;
-  }
   float a = (1.0 - smoothstep(0.12, 0.5, d)) * vAlpha;
   if (a < 0.01) discard;
   gl_FragColor = vec4(vCol, a);
@@ -141,7 +117,6 @@ uniform float uFogAmt;
 uniform float uLayer;
 uniform float uPass; // 0: inside the ball, 1: the part that spilled outside
 uniform vec3 uHazeColor;
-uniform float uNebula; // powder: the haze becomes a Hubble-coloured nebula with dark dust lanes
 varying vec3 vP;
 void main(){
   float rho = length(vP);
@@ -157,13 +132,6 @@ void main(){
   float spill = exp(-max(rho - 1.0, 0.0) * 3.2) * smoothstep(-0.1, 0.6, n + 0.25 * snoise(vP.xy * 2.3 + uTime * 0.03));
   float dens = mix(core, spill, outside) * (1.0 - smoothstep(1.5, 1.85, rho));
   vec3 c = mix(uHazeColor, uLightColor, 0.3) * (uLightInt * 0.9 + 0.1);
-  if (uNebula > 0.002){
-    float m = fbm(vP.xy * 1.3 + vP.z + uTime * 0.004) * 0.5 + 0.5;
-    vec3 neb = mix(vec3(0.12, 0.25, 0.7), vec3(0.95, 0.6, 0.25), smoothstep(0.35, 0.75, m) * (1.0 - smoothstep(0.2, 1.2, rho)));
-    float lane = smoothstep(0.42, 0.5, abs(snoise(vP.xy * 2.2 - vP.z) * 0.5)); // dark dust lanes
-    c = mix(c, neb * (0.6 + 1.1 * lane), uNebula);
-    dens *= mix(1.0, (0.5 + 0.9 * lane) * 3.2, uNebula); // a dense glowing cloud
-  }
   gl_FragColor = vec4(c, dens * passW * uFogAmt * 0.15);
 }
 `;
@@ -186,38 +154,12 @@ uniform float uGem;        // prism: each flat face throws a sharp spectrum band
 uniform mat3 uGroupRot;    // the gem's rotation
 uniform vec3 uFieldColor; // Ganzfeld pattern: the field floods to one colour
 uniform float uSpectralAmt; // prism: spectral caustics thrown onto the field
-uniform float uArms;        // medusa: oral arms and tentacles trailing below the bell
-uniform vec2 uArmSway;      // how far the arms lag behind the pointer's motion
 varying vec2 vUv;
 void main(){
   vec3 c = fieldColor(vUv);
   vec2 q = (vUv - uCenter) * vec2(uAspect, 1.0);
   float d = length(q);
   c = mix(c, uFieldColor * (0.5 + 0.3 * exp(-d * d * 1.4)), uGanz * 0.88);
-  // Medusa: four frilled oral arms and fine tentacles hanging below the bell. They
-  // drift after the pointer's motion (uArmSway lags behind it) instead of snapping.
-  if (uArms > 0.002){
-    vec2 o = (vUv - uCenter) * vec2(uAspect, 1.0) / max(uOrbR, 1e-3);
-    float y = -o.y - 0.3; // distance below the bell's margin, in orb radii
-    if (y > 0.0){
-      float t = uFieldTime;
-      vec3 acc = vec3(0.0);
-      for (int i = 0; i < 9; i++){
-        float fi = float(i);
-        bool arm = i < 4;
-        float x0 = arm ? (fi - 1.5) * 0.2 : (fi - 6.5) * 0.36;
-        float sway = uArmSway.x * y * (0.45 + 0.08 * fi) + 0.07 * sin(y * 2.6 - t * 0.25 + fi * 1.7) * y;
-        float x = o.x - x0 * (1.0 - y * 0.12) - sway;
-        float w = arm ? 0.075 * (1.0 + 0.45 * sin(y * 13.0 + fi * 2.0)) * (1.0 - smoothstep(0.0, 2.6, y)) + 0.012 : 0.008;
-        float len = arm ? 2.2 : 3.2;
-        float a = exp(-x * x / (w * w)) * (1.0 - smoothstep(len * 0.55, len, y)) * smoothstep(0.0, 0.12, y);
-        vec3 tint = arm ? mix(vec3(0.35, 0.55, 1.0), vec3(0.9, 0.45, 1.0), fract(fi * 0.37)) : vec3(0.3, 0.9, 1.0);
-        acc += tint * a * (arm ? 0.3 : 0.4);
-      }
-      c += acc * uArms;
-    }
-  }
-
   // Prism: every side-facing flat face of the gem throws one sharp spectrum band out
   // into the scene, in the direction that face points; they turn with the gem.
   if (uGem > 0.002){
@@ -243,7 +185,7 @@ void main(){
   if (uSpectralAmt > 0.002){
     vec2 o = (vUv - uCenter) * vec2(uAspect, 1.0) / max(uOrbR, 1e-3); // in orb radii
     vec2 cq = o - vec2(0.6, -1.5);
-    float m = exp(-pow(cq.x / 1.5, 2.0) - pow(cq.y / 0.42, 2.0));
+    float m = exp(-sq(cq.x / 1.5) - sq(cq.y / 0.42));
     float t = uFieldTime * 0.05;
     float band = fract(cq.x * 0.32 + 0.07 * sin(cq.y * 3.0 + t * 2.0) + t * 0.08);
     float lines = pow(0.5 + 0.5 * sin((cq.x * 6.0 + 0.6 * sin(cq.y * 5.0 + t * 3.0) + t) * 3.14159), 5.0);

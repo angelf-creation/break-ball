@@ -32,7 +32,7 @@ export function saveBreath(id: BreathPresetId) {
 const LEN_KEY = 'break-ball.length';
 const MIX_KEY = 'break-ball.mix';
 export const DEFAULT_MIX: MixLevels = {
-  orb: 0.8, rain: 0, wind: 0, waves: 0, forest: 0, birdsong: 0, tone40: 0, tone136: 0, binaural: 0, breath: 0.5,
+  orb: 0.8, rain: 0, wind: 0, waves: 0, forest: 0, birdsong: 0, fire: 0, night: 0, tone40: 0, tone136: 0, binaural: 0, breath: 0.5,
 };
 function load<T>(key: string, fallback: T, ok: (v: unknown) => boolean): T {
   try {
@@ -63,7 +63,6 @@ const initial: AppState = {
   artist: 'default',
   historyOpen: false,
   session: { id: 'free', startedAt: null, durationSec: 0 },
-  sessionCompletedAt: null,
   sound: { enabled: false, volume: 0.6 },
   time: { live: true, scrubHour: 12 },
   activeVideo:
@@ -80,6 +79,7 @@ const initial: AppState = {
       ? load<SessionId>(LEN_KEY, 'm15', (v) => ['m5', 'm15', 'm42', 'm60', 'open'].includes(v as string))
       : 'm15',
   bloomAt: null,
+  notice: null,
   journalRev: 0,
   calendarOpen: false,
   mixerOpen: false,

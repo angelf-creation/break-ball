@@ -3,7 +3,7 @@ import { MODE_PACE, saveBreath, store } from '../state/store';
 import { MATERIAL_BY_ID } from '../data/materials';
 import type { BreathPresetId } from '../time/breath';
 import { OPEN_MIN_SEC, SESSION_BY_ID } from '../data/sessions';
-import { addEntry, earnsBloom, readJournal } from '../state/journal';
+import { addEntry, completionMessage, earnsBloom, readJournal, welcomeBack } from '../state/journal';
 import type { AppMode, SessionId } from '../state/types';
 import type { AudioEngine } from '../audio/AudioEngine';
 
@@ -97,10 +97,18 @@ function completeSession(durationSec: number) {
   const now = new Date();
   const before = readJournal();
   const bloom = earnsBloom(before, now);
-  addEntry({ at: now.toISOString(), durationSec, breath: s.breathPreset, material: s.material });
+  const after = addEntry({
+    at: now.toISOString(),
+    startedAt: new Date(s.session.startedAt ?? now.getTime() - durationSec * 1000).toISOString(),
+    durationSec,
+    breath: s.breathPreset,
+    material: s.material,
+    length: s.session.id,
+  });
+  const msg = completionMessage(after, now);
   store.set({
     session: { id: 'free', startedAt: null, durationSec: 0 },
-    sessionCompletedAt: Date.now(),
+    notice: { ...msg, at: Date.now() },
     journalRev: s.journalRev + 1,
     bloomAt: bloom ? Date.now() : s.bloomAt,
   });
@@ -110,6 +118,14 @@ function completeSession(durationSec: number) {
 export function setBreathPreset(id: BreathPresetId) {
   saveBreath(id);
   store.set({ breathPreset: id });
+}
+
+/** On opening: upgrade the journal if needed, and greet someone who has been away. */
+export function useWelcome() {
+  useEffect(() => {
+    const text = welcomeBack(readJournal());
+    if (text) store.set({ notice: { text, at: Date.now(), sparkle: false } });
+  }, []);
 }
 
 /** Ends timed sessions on completion and plays a soft chime. */

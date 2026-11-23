@@ -1,168 +1,117 @@
 import * as THREE from 'three';
 
 /**
- * Generator 3 (growth fronts): diffusion-limited aggregation.
+ * Roots: a branching network grown by space colonisation, like leaf veins or a river
+ * delta. Points of "food" fill the disc; every twig grows toward the food nearest it and
+ * removes what it reaches. A twig's thickness follows how many twigs it feeds, and its
+ * distance along the tree says when the growth gets there, so the shader can let the
+ * network creep outward instead of appearing all at once.
  *
- * Random walkers wander until they touch the cluster and stick; the result is
- * the branching fern of frost (or, seeded differently, a colony of mould).
- * Each cell stores WHEN it froze (its arrival order), so the shader can reveal
- * the growth gradually by comparing that order against a growing threshold:
- * the pattern creeps across the surface instead of appearing fully formed.
- *
- * Texture channels: R = arrival order 0..1 times occupancy (empty = 0), G = 1 where
- * occupied. Blurred (mipmapped) samples give the mean order as R / G.
- * Run once per mode, lazily, the first time a material needs it.
+ * Texture: R = arrival 0..1, G = coverage, B = the glowing channel inside the thicker
+ * branches. Built once, the first time Root is chosen.
  */
-export type GrowthMode = 'rim' | 'centre';
-
-export interface GrowthOptions {
-  size?: number;
-  particles?: number;
-  /** rim mode: how many seed points sit on the rim (each grows its own fern) */
-  seeds?: number;
-}
-
-export function makeGrowthTexture(mode: GrowthMode, opts: GrowthOptions = {}): THREE.DataTexture {
-  const N = opts.size ?? 256;
-  const target = opts.particles ?? (mode === 'rim' ? 9000 : 7000);
-  const occ = new Uint8Array(N * N);
-  const order = new Float32Array(N * N);
-  const c = (N - 1) / 2;
-  const R = c - 2; // disc radius in cells
-  const at = (x: number, y: number) => y * N + x;
-  let count = 0;
-  let edgeR = mode === 'rim' ? R : 0; // innermost (rim) / outermost (centre) cluster radius
-
-  const stick = (x: number, y: number) => {
-    occ[at(x, y)] = 1;
-    order[at(x, y)] = count++;
-    const r = Math.hypot(x - c, y - c);
-    edgeR = mode === 'rim' ? Math.min(edgeR, r) : Math.max(edgeR, r);
-  };
-
-  if (mode === 'rim') {
-    const seeds = opts.seeds ?? 36;
-    for (let i = 0; i < seeds; i++) {
-      const a = (i / seeds) * Math.PI * 2 + Math.random() * 0.08;
-      stick(Math.round(c + Math.cos(a) * R), Math.round(c + Math.sin(a) * R));
-    }
-  } else {
-    stick(Math.round(c), Math.round(c));
-  }
-
-  const touching = (x: number, y: number) =>
-    occ[at(x + 1, y)] || occ[at(x - 1, y)] || occ[at(x, y + 1)] || occ[at(x, y - 1)];
-
-  let guard = 0;
-  while (count < target && guard < target * 60) {
-    guard++;
-    // launch just beyond the growing edge, on the side the cluster grows toward
+export function makeRootTexture(size = 1024, food = 5200): THREE.CanvasTexture {
+  const STEP = 0.011, NEAR = 0.02, REACH = 0.16, CELL = REACH;
+  const px: number[] = [0], py: number[] = [0], par: number[] = [-1];
+  let fx: number[] = [], fy: number[] = [];
+  for (let i = 0; i < food; i++) {
     const a = Math.random() * Math.PI * 2;
-    // rim: launch anywhere between the deepest tip and halfway out, so every fern keeps feeding
-    const r0 = mode === 'rim' ? Math.max(2, edgeR - 4 + Math.random() * (R - edgeR) * 0.5) : Math.min(R - 1, edgeR + 4);
-    if (mode === 'rim' && edgeR < 4) break;
-    if (mode === 'centre' && edgeR > R - 3) break;
-    let x = Math.round(c + Math.cos(a) * r0);
-    let y = Math.round(c + Math.sin(a) * r0);
-    for (let step = 0; step < 6000; step++) {
-      const d = Math.random();
-      if (d < 0.25) x++;
-      else if (d < 0.5) x--;
-      else if (d < 0.75) y++;
-      else y--;
-      if (x < 1 || y < 1 || x > N - 2 || y > N - 2) break;
-      const r = Math.hypot(x - c, y - c);
-      if (r > R) break; // left the disc
-      // wandered too far from the front: give up and relaunch (keeps it fast)
-      if (mode === 'rim' ? r < edgeR - 40 : r > edgeR + 40) break;
-      if (!occ[at(x, y)] && touching(x, y)) {
-        stick(x, y);
-        break;
-      }
+    const r = Math.sqrt(Math.random()) * (0.94 + 0.06 * Math.sin(a * 5));
+    fx.push(Math.cos(a) * r);
+    fy.push(Math.sin(a) * r);
+  }
+  const cells = new Map<number, number[]>();
+  const key = (x: number, y: number) => Math.floor((x + 2) / CELL) * 1000 + Math.floor((y + 2) / CELL);
+  const add = (i: number) => {
+    const k = key(px[i], py[i]);
+    const c = cells.get(k);
+    if (c) c.push(i);
+    else cells.set(k, [i]);
+  };
+  add(0);
+  // a few main roots set out first, so it spreads like a delta rather than a disc
+  for (let m = 0; m < 6; m++) {
+    const a = (m / 6) * Math.PI * 2 + (Math.random() - 0.5) * 0.7;
+    let p = 0, x = 0, y = 0, d = a;
+    for (let k = 0; k < 24; k++) {
+      d += (Math.random() - 0.5) * 0.5;
+      x += Math.cos(d) * STEP;
+      y += Math.sin(d) * STEP;
+      px.push(x);
+      py.push(y);
+      par.push(p);
+      p = px.length - 1;
+      add(p);
     }
   }
-
-  const data = new Uint8Array(N * N * 4);
-  const maxO = Math.max(1, count - 1);
-  for (let i = 0; i < N * N; i++) {
-    data[i * 4] = occ[i] ? Math.max(1, Math.round((order[i] / maxO) * 255)) : 0;
-    data[i * 4 + 1] = occ[i] ? 255 : 0;
-    data[i * 4 + 2] = 0;
-    data[i * 4 + 3] = 255;
+  for (let it = 0; it < 220 && fx.length; it++) {
+    const pull = new Map<number, [number, number]>();
+    const keepX: number[] = [], keepY: number[] = [];
+    for (let i = 0; i < fx.length; i++) {
+      let best = -1, bd = REACH;
+      for (let gx = -1; gx <= 1; gx++)
+        for (let gy = -1; gy <= 1; gy++) {
+          const c = cells.get(key(fx[i] + gx * CELL, fy[i] + gy * CELL));
+          if (!c) continue;
+          for (const n of c) {
+            const dd = Math.hypot(px[n] - fx[i], py[n] - fy[i]);
+            if (dd < bd) {
+              bd = dd;
+              best = n;
+            }
+          }
+        }
+      if (best >= 0 && bd < NEAR) continue; // eaten
+      keepX.push(fx[i]);
+      keepY.push(fy[i]);
+      if (best < 0) continue;
+      const v = pull.get(best) ?? [0, 0];
+      v[0] += (fx[i] - px[best]) / bd;
+      v[1] += (fy[i] - py[best]) / bd;
+      pull.set(best, v);
+    }
+    fx = keepX;
+    fy = keepY;
+    if (!pull.size) break;
+    pull.forEach(([vx, vy], n) => {
+      const a = Math.atan2(vy, vx) + (Math.random() - 0.5) * 0.7; // a wandering hand
+      px.push(px[n] + Math.cos(a) * STEP);
+      py.push(py[n] + Math.sin(a) * STEP);
+      par.push(n);
+      add(px.length - 1);
+    });
   }
-  const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.generateMipmaps = true;
-  tex.needsUpdate = true;
-  return tex;
-}
-
-/**
- * Branching (root): a radially symmetric "root mandala". One branching tree is
- * grown by a small recursive L-system (each segment splits, turns and tapers),
- * then drawn N times around the centre and mirrored, so it reads as a mandala
- * rather than a tangle. Channels: R = coverage, G = thinness (1 at the finest
- * tips), so the shader can make it glow where it is thinnest.
- */
-export function makeRootTexture(size = 512, arms = 8): THREE.CanvasTexture {
+  const n = px.length;
+  const feed = new Float32Array(n).fill(1);
+  for (let i = n - 1; i > 0; i--) feed[par[i]] += feed[i];
+  const reach = new Float32Array(n);
+  let max = 1e-3;
+  for (let i = 1; i < n; i++) {
+    reach[i] = reach[par[i]] + STEP;
+    max = Math.max(max, reach[i]);
+  }
   const cv = document.createElement('canvas');
   cv.width = cv.height = size;
   const g = cv.getContext('2d')!;
   g.fillStyle = '#000';
   g.fillRect(0, 0, size, size);
-  g.globalCompositeOperation = 'lighten';
-  g.lineCap = 'round';
-  const c = size / 2;
-  const maxW = size * 0.014;
-
-  type Seg = [number, number, number, number, number]; // x0 y0 x1 y1 width
-  const segs: Seg[] = [];
-  // deterministic-ish randomness so every arm grows the same tree
-  let seed = 7;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  const grow = (x: number, y: number, ang: number, len: number, w: number, depth: number) => {
-    if (depth > 7 || w < 0.5) return;
-    const x1 = x + Math.cos(ang) * len;
-    const y1 = y + Math.sin(ang) * len;
-    if (Math.hypot(x1 - c, y1 - c) > size * 0.48) return;
-    segs.push([x, y, x1, y1, w]);
-    // a gentle wander, then split into two (sometimes three) thinner branches
-    const wander = (rnd() - 0.5) * 0.35;
-    const n = rnd() < 0.25 ? 3 : 2;
-    for (let i = 0; i < n; i++) {
-      const spread = (i - (n - 1) / 2) * (0.38 + rnd() * 0.25);
-      grow(x1, y1, ang + wander + spread, len * (0.72 + rnd() * 0.14), w * 0.66, depth + 1);
-    }
+  g.lineCap = g.lineJoin = 'round';
+  const at = (v: number) => (v * 0.485 + 0.5) * size;
+  const order = Array.from({ length: n - 1 }, (_, i) => i + 1).sort((a, b) => feed[a] - feed[b]);
+  const width = (i: number) => (size / 1024) * Math.min(30, 0.9 + 0.62 * Math.pow(feed[i], 0.5));
+  const seg = (i: number, b: number, w: number) => {
+    g.strokeStyle = `rgb(${Math.round((reach[i] / max) * 255)},255,${b})`;
+    g.lineWidth = w;
+    g.beginPath();
+    g.moveTo(at(px[par[i]]), at(py[par[i]]));
+    g.lineTo(at(px[i]), at(py[i]));
+    g.stroke();
   };
-  // one arm, pointing up from just outside the centre
-  grow(c, c - size * 0.035, -Math.PI / 2, size * 0.085, maxW, 0);
-
-  for (let a = 0; a < arms; a++) {
-    for (const mirror of [1, -1]) {
-      g.save();
-      g.translate(c, c);
-      g.rotate((a / arms) * Math.PI * 2);
-      g.scale(mirror, 1);
-      g.translate(-c, -c);
-      for (const [x0, y0, x1, y1, w] of segs) {
-        const thin = Math.round((1 - w / maxW) * 255);
-        g.strokeStyle = `rgb(255,${thin},0)`;
-        g.lineWidth = w;
-        g.beginPath();
-        g.moveTo(x0, y0);
-        g.lineTo(x1, y1);
-        g.stroke();
-      }
-      g.restore();
-    }
+  for (const i of order) seg(i, 0, width(i));
+  for (const i of order) {
+    const w = width(i);
+    if (w > 4) seg(i, Math.round(Math.min(255, 90 + w * 9)), Math.max(1.2, w * 0.3));
   }
-  // the heart where every arm meets
-  g.fillStyle = 'rgb(255,0,0)';
-  g.beginPath();
-  g.arc(c, c, size * 0.04, 0, Math.PI * 2);
-  g.fill();
-
   const tex = new THREE.CanvasTexture(cv);
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;

@@ -62,9 +62,7 @@ export type VoiceSpec =
   | { voice: 'swell'; color: NoiseColor; dur: Pair; sweep: [number, number, number]; amp: number }
   /** a water drop: a fast rising sine chirp, echoed on touch (Water) */
   | { voice: 'drop'; range: [number, number]; chirp: number; decay: number; amp: number; echo: number }
-  /** a wobbling metallic whirl rising in pitch (Mercury) */
-  | { voice: 'whirl'; notes: number[]; dur: Pair; rise: number; vibrato: number; band: [number, number]; amp: number }
-  /** a soft sift of bandpassed noise (Powder) */
+  /** a soft sift of bandpassed noise (organic rustles) */
   | { voice: 'hiss'; band: [number, number]; dur: Pair; amp: number }
   /** fracture ticks (tiny bright clicks) followed by a low settling (Ice) */
   | { voice: 'crackle'; ticks: Pair; spread: number; band: [number, number]; settle: number; amp: number }

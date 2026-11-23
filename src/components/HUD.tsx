@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { store, useStore } from '../state/store';
-import { ArtistPicker, MaterialPicker, PatternPicker, SessionPicker } from './Controls';
+import { ArtistPicker, MaterialPicker, PatternPicker } from './Controls';
+import { Sessions } from './Sessions';
+import { Wordmark } from './Wordmark';
 import { SoundPanel } from './Mixer';
 import { CalendarCard } from './Calendar';
 import { StatusPill } from './StatusPill';
@@ -40,7 +42,7 @@ function CalendarButton() {
   const open = useStore((s) => s.calendarOpen);
   return (
     <CircleButton
-      size={36}
+      size={40}
       aria-label="Practice calendar"
       aria-expanded={open}
       onClick={() => store.set((s) => ({ calendarOpen: !s.calendarOpen, mixerOpen: false }))}
@@ -58,7 +60,7 @@ function SoundButton() {
   const on = useStore((s) => s.sound.enabled);
   return (
     <CircleButton
-      size={36}
+      size={40}
       aria-label="Sound and mixer"
       aria-expanded={open}
       onClick={() => store.set((s) => ({ mixerOpen: !s.mixerOpen, calendarOpen: false }))}
@@ -81,12 +83,8 @@ function DesktopHUD() {
           <StatusPill />
         </Dimmable>
       </div>
-      <div className="absolute top-5 left-6 z-20 pointer-events-none">
-        {/* two-tone headline: emphasis by opacity, never weight (Laginchy has one) */}
-        <h1 className="font-display text-[22px] leading-none tracking-[0.01em]">
-          <span className="text-white/90">Break</span> <span className="text-white/40">Ball</span>
-        </h1>
-        <div className="font-display text-[13px] text-white/30 mt-1.5">slow breaths, soft focus</div>
+      <div className="absolute top-6 left-7 z-20 pointer-events-none">
+        <Wordmark />
       </div>
       <div className="absolute top-5 right-6 z-30">
         <Dimmable level="soft" className="flex items-center gap-2">
@@ -97,7 +95,7 @@ function DesktopHUD() {
       </div>
       {/* sound panel: shown or hidden */}
       <div
-        className={`${glass} absolute top-[68px] right-6 z-30 w-[300px] max-h-[calc(100vh-96px)] overflow-y-auto no-scrollbar rounded-squircle px-6 py-5 transition-all duration-500 ${
+        className={`${glass} absolute top-[68px] right-6 z-30 w-[320px] max-h-[calc(100vh-96px)] overflow-y-auto no-scrollbar rounded-panel px-7 py-6 transition-all duration-500 ${
           mixerOpen ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'
         }`}
         aria-hidden={!mixerOpen}
@@ -105,42 +103,41 @@ function DesktopHUD() {
         <SoundPanel />
       </div>
       {calendarOpen && (
-        <div className={`${glass} absolute top-[68px] right-6 z-30 w-[300px] rounded-squircle px-6 py-5`}>
+        <div className={`${glass} absolute top-[68px] right-6 z-30 w-[380px] max-h-[calc(100vh-96px)] overflow-y-auto no-scrollbar rounded-panel px-7 py-6`}>
           <CalendarCard />
         </div>
       )}
 
-      <Dimmable className="absolute left-5 top-1/2 -translate-y-1/2 z-20 w-[226px]">
-        <Panel className="px-3.5 py-5 flex flex-col gap-4 max-h-[calc(100vh-140px)] overflow-y-auto no-scrollbar">
+      <Dimmable className="absolute left-6 top-1/2 -translate-y-1/2 z-20 w-[244px]">
+        <Panel className="px-5 py-6 flex flex-col gap-5 max-h-[calc(100vh-180px)] overflow-y-auto no-scrollbar">
           <div>
-            <Label className="px-3.5 mb-1.5">Material</Label>
+            <Label className="px-1 mb-3">Material</Label>
             <MaterialPicker />
           </div>
-          <div className="h-px bg-white/[0.06]" />
+          <div className="h-px bg-white/10" />
           <div>
-            <Label className="px-3.5 mb-1.5">Pattern</Label>
+            <Label className="px-1 mb-3">Pattern</Label>
             <PatternPicker />
           </div>
         </Panel>
       </Dimmable>
 
-      <Dimmable className="absolute right-5 top-1/2 -translate-y-1/2 z-20 w-[232px]">
-        <Panel className="px-3.5 py-5 flex flex-col gap-4 max-h-[calc(100vh-140px)] overflow-y-auto no-scrollbar">
-          <div>
-            <Label className="px-3.5 mb-1.5">Artist · History</Label>
+      {/* two separate panels: artists, and sessions */}
+      <Dimmable className="absolute right-6 top-[calc(50%+24px)] -translate-y-1/2 z-20 w-[256px]">
+        <div className="flex flex-col gap-3 max-h-[calc(100vh-112px)] overflow-y-auto no-scrollbar">
+          <Panel className="px-5 py-5 shrink-0">
+            <Label className="px-1 mb-3">Artist · History</Label>
             <ArtistPicker />
-          </div>
-          <div className="h-px bg-white/[0.06]" />
-          <div>
-            <Label className="px-3.5 mb-1.5">Session</Label>
-            <SessionPicker />
-          </div>
-        </Panel>
+          </Panel>
+          <Panel className="px-6 py-6 shrink-0">
+            <Sessions />
+          </Panel>
+        </div>
       </Dimmable>
 
       <div className="absolute bottom-6 left-6 z-10 flex flex-col gap-1.5">
         <Dimmable className="pointer-events-none">
-          <div className="text-[11px] text-white/30 tracking-wide">Click or drag the orb · move to tilt</div>
+          <div className="title-shadow text-[12px] text-white/60 tracking-wide">Drag to turn the ball · click to touch it</div>
         </Dimmable>
       </div>
     </>
@@ -152,13 +149,13 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'material', label: 'Material' },
   { id: 'pattern', label: 'Pattern' },
   { id: 'artist', label: 'Artist' },
-  { id: 'session', label: 'Session' },
+  { id: 'session', label: 'Sessions' },
   { id: 'sound', label: 'Sound' },
 ];
 
 /**
- * Phone spacing: 12px from every screen edge (plus safe areas), 8px between
- * stacked frames, 12–16px inside them. The bottom stack reports its height so
+ * Phone spacing: 16px from every screen edge (plus safe areas), 12px between
+ * stacked frames, 24px inside them. The bottom stack reports its height so
  * the scene centres the orb in the space left above it.
  */
 function MobileHUD() {
@@ -166,6 +163,10 @@ function MobileHUD() {
   const historyShown = useStore((s) => s.historyOpen && s.session.id === 'free');
   const calendarOpen = useStore((s) => s.calendarOpen);
   const stackRef = useRef<HTMLDivElement>(null);
+  // one sheet at a time: opening the calendar closes whichever tab was open
+  useEffect(() => {
+    if (calendarOpen) setTab(null);
+  }, [calendarOpen]);
 
   useEffect(() => {
     const el = stackRef.current;
@@ -179,7 +180,7 @@ function MobileHUD() {
 
   return (
     <>
-      <div className="absolute top-[calc(env(safe-area-inset-top)+12px)] left-0 right-0 z-30 flex items-start justify-between px-3 gap-2">
+      <div className="absolute top-[calc(env(safe-area-inset-top)+16px)] left-0 right-0 z-30 flex items-start justify-between px-4 gap-2">
         <Dimmable level="soft" className="min-w-0">
           <StatusPill />
         </Dimmable>
@@ -189,42 +190,46 @@ function MobileHUD() {
         </Dimmable>
       </div>
 
+      <Dimmable level="soft" className="pointer-events-none absolute inset-x-0 top-[calc(env(safe-area-inset-top)+78px)] z-20 px-5 text-center">
+        <Wordmark />
+      </Dimmable>
+
       <Dimmable className="absolute left-0 right-0 bottom-0 z-20">
         <div
           ref={stackRef}
-          className="pl-[calc(env(safe-area-inset-left)+12px)] pr-[calc(env(safe-area-inset-right)+12px)] pb-[calc(env(safe-area-inset-bottom)+12px)]"
+          className="pl-[calc(env(safe-area-inset-left)+16px)] pr-[calc(env(safe-area-inset-right)+16px)] pb-[calc(env(safe-area-inset-bottom)+16px)]"
         >
-        {/* collapsed frames take no space; open ones get an 8px gap below */}
-        <div className={`transition-[margin] duration-500 ${historyShown ? 'mb-2' : 'mb-0'}`}>
+        {/* collapsed frames take no space; open ones get a 12px gap below */}
+        <div className={`transition-[margin] duration-500 ${historyShown ? 'mb-3' : 'mb-0'}`}>
           <HistoryCard inline />
         </div>
         {calendarOpen && (
-          <div className={`${glass} rounded-squircle px-5 py-4 mb-2`}>
+          <div className={`${glass} rounded-panel px-6 py-6 mb-3 max-h-[62vh] overflow-y-auto no-scrollbar`}>
             <CalendarCard />
           </div>
         )}
         {/* sound sheet: always mounted, shown when the Sound tab is open */}
         <div
-          className={`${glass} rounded-squircle overflow-y-auto no-scrollbar transition-all duration-500 ease-out ${
-            tab === 'sound' ? 'max-h-[52vh] opacity-100 px-5 py-4 mb-2' : 'max-h-0 opacity-0 p-0 mb-0 border-transparent pointer-events-none'
+          className={`${glass} rounded-panel overflow-y-auto no-scrollbar transition-all duration-500 ease-out ${
+            tab === 'sound' ? 'max-h-[56vh] opacity-100 px-6 py-6 mb-3' : 'max-h-0 opacity-0 p-0 mb-0 border-transparent pointer-events-none'
           }`}
           aria-hidden={tab !== 'sound'}
         >
           <SoundPanel />
         </div>
         <div
-          className={`${glass} rounded-squircle overflow-hidden transition-all duration-500 ease-out ${
-            tab && tab !== 'sound' ? 'max-h-[300px] opacity-100 px-4 py-4 mb-2' : 'max-h-0 opacity-0 p-0 mb-0 border-transparent'
+          className={`${glass} rounded-panel overflow-hidden transition-all duration-500 ease-out ${
+            tab && tab !== 'sound' ? 'max-h-[420px] opacity-100 px-6 py-6 mb-3' : 'max-h-0 opacity-0 p-0 mb-0 border-transparent'
           }`}
           aria-hidden={!tab || tab === 'sound'}
         >
           {tab === 'material' && <MaterialPicker variant="chip" />}
           {tab === 'pattern' && <PatternPicker variant="chip" />}
           {tab === 'artist' && <ArtistPicker variant="chip" />}
-          {tab === 'session' && <SessionPicker variant="chip" />}
+          {tab === 'session' && <Sessions />}
         </div>
         {/* tab bar: inner padding keeps labels off the pill's curve, gaps keep tabs apart */}
-        <nav className={`${glass} rounded-full flex gap-1 p-1.5`} aria-label="Controls">
+        <nav className={`${glass} rounded-panel flex gap-1 p-2`} aria-label="Controls">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -234,8 +239,8 @@ function MobileHUD() {
                 setTab((cur) => (cur === t.id ? null : t.id));
                 store.set({ calendarOpen: false });
               }}
-              className={`flex-1 min-w-0 rounded-full px-2 py-2.5 text-[11.5px] tracking-wide ${
-                tab === t.id ? glassBtn(true) : `${glassBtn(false)} text-white/55`
+              className={`flex-1 min-w-0 rounded-btn px-1 py-3 text-[12px] ${
+                tab === t.id ? glassBtn(true) : `${glassBtn(false)} text-white/75`
               }`}
             >
               {t.label}

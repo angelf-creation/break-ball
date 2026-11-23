@@ -127,7 +127,7 @@ body {
       0 12px 40px -14px rgba(0, 0, 0, 0.75);
   }
 
-  /* the ONE primary action: a solid white pill, dark text */
+  /* the ONE primary action: solid white, dark text */
   .btn-primary {
     background: #f7f6ff;
     color: #0b0d1a;
@@ -139,12 +139,13 @@ body {
     transition: transform 0.3s, box-shadow 0.3s, background-color 0.3s;
   }
   .btn-primary:hover {
-    background: #ffffff;
+    background: #e6e1ff;
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 1),
       0 8px 30px -8px rgba(200, 195, 255, 0.75);
   }
   .btn-primary:active {
+    background: #cfc7ff;
     transform: scale(0.98);
   }
 
@@ -168,8 +169,72 @@ body {
     transition: background-color 0.3s, border-color 0.3s, box-shadow 0.3s, color 0.3s;
   }
   .glass-btn:hover {
-    background: linear-gradient(160deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.025));
-    border-color: rgba(255, 255, 255, 0.1);
+    background: linear-gradient(160deg, rgba(176, 170, 255, 0.2), rgba(140, 170, 255, 0.07));
+    border-color: rgba(190, 185, 255, 0.28);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  }
+  .glass-btn:active,
+  .glass-btn-active:active {
+    background: linear-gradient(160deg, rgba(176, 170, 255, 0.36), rgba(140, 170, 255, 0.16));
+  }
+  .glass-btn-active {
+    transition: background-color 0.3s, border-color 0.3s;
+  }
+  .glass-btn-active:hover {
+    border-color: rgba(205, 200, 255, 0.55);
+  }
+
+  /* every other control: a small shift toward lavender on hover, deeper on press */
+  .tap {
+    transition: background-color 0.25s, border-color 0.25s, color 0.25s;
+  }
+  .tap:hover {
+    background-color: rgba(176, 170, 255, 0.2);
+    border-color: rgba(205, 200, 255, 0.45);
+  }
+  .tap:active {
+    background-color: rgba(176, 170, 255, 0.38);
+  }
+
+  .title-shadow {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55), 0 0 18px rgba(0, 0, 0, 0.45);
+  }
+
+  /* session messages */
+  .notice-in {
+    animation: notice-in 1.4s ease-out both;
+  }
+  .spark {
+    position: absolute;
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: radial-gradient(circle, #fff 0%, rgba(214, 200, 255, 0.8) 40%, transparent 75%);
+    opacity: 0;
+    animation: spark 3.2s ease-in-out 2 both;
+  }
+}
+
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+@keyframes spark {
+  0%,
+  100% {
+    opacity: 0;
+    transform: translateY(0) scale(0.4);
+  }
+  45% {
+    opacity: 1;
+    transform: translateY(-8px) scale(1.3);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .notice-in,
+  .spark {
+    animation: none;
   }
 }
