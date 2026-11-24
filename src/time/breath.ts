@@ -15,7 +15,7 @@ export interface BreathPreset {
 
 export const BREATH_PRESETS: BreathPreset[] = [
   { id: 'calm', label: 'Calm', hint: '3 in · 0.7 hold · 4 out · 2 rest', inhale: 3, hold: 0.7, exhale: 4, rest: 2 },
-  { id: 'simple', label: 'Simple', hint: '4 in · 6 out', inhale: 4, hold: 0, exhale: 6, rest: 0 },
+  { id: 'simple', label: 'Simple', hint: '5 in · 8 out', inhale: 5, hold: 0, exhale: 8, rest: 0 },
   { id: '478', label: '4-7-8', hint: '4 in · 7 hold · 8 out', inhale: 4, hold: 7, exhale: 8, rest: 0 },
 ];
 export const DEFAULT_BREATH: BreathPresetId = 'calm';

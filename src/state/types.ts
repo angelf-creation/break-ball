@@ -53,6 +53,9 @@ export interface AppState {
   bloomAt: number | null;
   /** a short message after a session or on returning; fades by itself */
   notice: { text: string; at: number; sparkle: boolean } | null;
+  /** the visitor's own song, kept on this device only */
+  music: { name: string; file: Blob } | null;
+  musicPlaying: boolean;
   /** bumped when the journal changes, so the calendar re-reads it */
   journalRev: number;
   calendarOpen: boolean;
@@ -69,7 +72,8 @@ export interface MixLevels {
   waves: number;
   forest: number; // CC0 field recording (see CREDITS.md)
   birdsong: number; // CC0 field recording (see CREDITS.md)
-  fire: number; // cosy fireplace (synthesised)
+  music: number; // the visitor's own song
+  fire: number; // CC0 field recording (see CREDITS.md)
   tone40: number; // pure 40 Hz tone
   tone136: number; // pure 136.1 Hz tone
   binaural: number; // 6 Hz difference between ears (headphones)

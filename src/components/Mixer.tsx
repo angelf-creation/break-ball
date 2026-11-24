@@ -2,13 +2,14 @@ import { DEFAULT_MIX, save, store, useStore } from '../state/store';
 import type { MixLevels } from '../state/types';
 import { Label } from './ui';
 import { SoundControl } from './Controls';
+import { MusicPanel } from './Music';
 
 /** Moving any slider counts as the user gesture that may start audio. */
 function setLevel(k: keyof MixLevels, v: number) {
   const s = store.get();
   const mix = { ...s.mix, [k]: v };
   save('mix', mix);
-  store.set({ mix, sound: v > 0 && !s.sound.enabled ? { ...s.sound, enabled: true } : s.sound });
+  store.set({ mix, sound: v > 0 && k !== 'music' && !s.sound.enabled ? { ...s.sound, enabled: true } : s.sound });
 }
 
 function Slider({ k, label, note }: { k: keyof MixLevels; label: string; note?: string }) {
@@ -48,6 +49,8 @@ export function SoundPanel() {
         <Slider k="orb" label="Material sound" />
         <Slider k="breath" label="Breath cues" />
       </section>
+      <MusicPanel />
+      <Slider k="music" label="Music level" />
       <section>
         <Label className="mb-1">Nature</Label>
         <Slider k="rain" label="Rain" />

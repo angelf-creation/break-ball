@@ -255,6 +255,7 @@ export class OrbScene {
   private rest = new THREE.Quaternion();
   private fogGroup = new THREE.Group();
   private holdW = 0;
+  private openGlow = 0;
   private pressed = false;
   private pressT = 0;
   private dent = 0;
@@ -908,6 +909,13 @@ export class OrbScene {
       else if (b.phase === 'inhale') holdTarget = Math.max(holdTarget, 0.55 * b.value ** 5); // leans in before the hold
     }
     this.holdW = damp(this.holdW, holdTarget, holdTarget > this.holdW ? 1.5 : 0.75, dt);
+    // a session opens with a slow swell of light (about twelve seconds), then keeps a faint glow
+    // that rides the breath; it fades out again by itself when the session ends
+    const since = active ? sessionElapsed(s.session.startedAt) : 99;
+    const up = Math.min(1, since / 3.5);
+    const swell = since < 14 ? up * up * (3 - 2 * up) * (1 - Math.min(1, Math.max(0, (since - 5) / 9)) ** 2) : 0;
+    this.openGlow = damp(this.openGlow, swell * 0.5, 1.4, dt);
+    const glow = Math.min(0.9, this.openGlow + this.sessionW * (0.1 + 0.1 * this.breath));
     // the pillow's hollow: sinks quickly under the hand, fills out slowly
     this.dent = damp(this.dent, this.pressed ? 1 : 0, this.pressed ? 6 : 0.9, dt);
     U.uDent.value.w = Math.max(this.dent, Math.min(1, this.disperse * 0.5) * (this.pressed ? 1 : 0.4));
@@ -1052,8 +1060,9 @@ export class OrbScene {
         0.75 * Math.cos(a * 1.3) * k + this.lean.x * 1.2,
         0.5 * Math.sin(a * 0.9) * k + this.lean.y * 1.2,
         (0.045 + 0.05 * U.uSonic.value.x * (0.7 + 0.3 * Math.sin(U.uSonicT.value * 0.5)) + 0.03 * this.gen.aura + 0.03 * br + 0.02 * Math.min(1, this.spin.length())) * dimmed,
-        this.holdW,
+        this.holdW + glow * (1 - this.holdW),
       );
+      U.uBloom.value = Math.max(U.uBloom.value, this.openGlow * 0.25);
     }
     const ganz = this.pat[3];
     U.uGanz.value = ganz;

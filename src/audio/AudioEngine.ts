@@ -23,7 +23,7 @@ import type { MixLevels } from '../state/types';
 
 /** loudest each mixer channel gets at slider 1 (balances very different sources) */
 const CH_MAX: Record<keyof MixLevels, number> = {
-  orb: 1, rain: 0.5, wind: 0.45, waves: 0.55, forest: 0.8, birdsong: 0.6, fire: 0.62, tone40: 0.22, tone136: 0.07, binaural: 0.06, breath: 1.4,
+  orb: 1, rain: 0.5, wind: 0.45, waves: 0.55, forest: 0.8, birdsong: 0.6, fire: 1.5, music: 0.9, tone40: 0.22, tone136: 0.07, binaural: 0.06, breath: 1.4,
 };
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
@@ -71,6 +71,10 @@ export class AudioEngine {
     this.master.gain.setTargetAtTime(0, ctx.currentTime, 0.25);
     this.suspendTimer = window.setTimeout(() => {
       if (!this.enabled && ctx.state === 'running') ctx.suspend();
+      if (!this.enabled && this.musicEl) {
+        this.musicEl.pause();
+        if (store.get().musicPlaying) store.set({ musicPlaying: false });
+      }
     }, 1500);
   }
 
@@ -79,11 +83,63 @@ export class AudioEngine {
     if (this.ctx && this.enabled) this.master.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.15);
   }
 
+  // ---- the visitor's own song ----
+  private musicFade!: GainNode;
+  private musicEl: HTMLAudioElement | null = null;
+  private musicSrc: MediaElementAudioSourceNode | null = null;
+  private musicUrl = '';
+  private musicStop: number | null = null;
+
+  setMusic(file: Blob | null) {
+    if (this.musicEl) {
+      this.musicEl.pause();
+      this.musicEl.removeAttribute('src');
+    }
+    this.musicSrc?.disconnect();
+    if (this.musicUrl) URL.revokeObjectURL(this.musicUrl);
+    this.musicEl = null;
+    this.musicSrc = null;
+    this.musicUrl = '';
+    if (!file) return;
+    this.musicUrl = URL.createObjectURL(file);
+    this.musicEl = new Audio(this.musicUrl);
+    this.musicEl.loop = true;
+    this.musicEl.preload = 'metadata';
+    this.attachMusic();
+  }
+  private attachMusic() {
+    if (!this.ctx || !this.musicEl || this.musicSrc) return;
+    this.musicSrc = this.ctx.createMediaElementSource(this.musicEl);
+    this.musicSrc.connect(this.musicFade);
+  }
+  rewindMusic() {
+    if (this.musicEl) this.musicEl.currentTime = 0;
+  }
+  /** Eases in over a few seconds and out over about eight; never a hard cut. */
+  async playMusic(on: boolean) {
+    if (this.musicStop) clearTimeout(this.musicStop);
+    this.musicStop = null;
+    const el = this.musicEl;
+    if (on) {
+      if (!el) return;
+      if (!this.ctx) await this.enable();
+      const t = this.ctx!.currentTime;
+      this.musicFade.gain.cancelScheduledValues(t);
+      this.musicFade.gain.setTargetAtTime(1, t, 1.2);
+      el.play().catch(() => store.set({ musicPlaying: false }));
+    } else if (this.ctx && el) {
+      const t = this.ctx.currentTime;
+      this.musicFade.gain.cancelScheduledValues(t);
+      this.musicFade.gain.setTargetAtTime(0, t, 1.8);
+      this.musicStop = window.setTimeout(() => el.pause(), 8000);
+    }
+  }
+
   /** Mixer levels (0..1 each). */
   setMix(levels: MixLevels) {
     this.mix = levels;
     if (!this.ctx) return;
-    for (const k of ['forest', 'birdsong'] as const) if (levels[k] > 0) this.ensureRecording(k);
+    for (const k of ['forest', 'birdsong', 'fire'] as const) if (levels[k] > 0) this.ensureRecording(k);
     const t = this.ctx.currentTime;
     this.ch.forEach((g, k) => g.gain.setTargetAtTime(CH_MAX[k] * levels[k], t, 0.3));
   }
@@ -169,6 +225,8 @@ export class AudioEngine {
     });
     this.stoppers = [];
     this.layers.clear();
+    if (this.musicStop) clearTimeout(this.musicStop);
+    this.setMusic(null);
     this.ctx?.close();
     this.ctx = null;
     this.enabled = false;
@@ -177,7 +235,10 @@ export class AudioEngine {
   // ---------------------------------------------------------------------------
 
   private build() {
-    const ctx = new AudioContext({ latencyHint: 'interactive' });
+    // iPhone: say this is music-like playback, so the mute switch and a dimmed screen don't stop it
+    const ses = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
+    if (ses) ses.type = 'playback';
+    const ctx = new AudioContext({ latencyHint: 'playback' });
     this.ctx = ctx;
     this.nb = makeNoiseBuffers(ctx);
 
@@ -208,6 +269,12 @@ export class AudioEngine {
       return g;
     };
     this.orbBus = mixCh('orb');
+    // music keeps its own sound: it skips the session darkening and the compressor
+    const mg = this.gain(0);
+    this.musicFade = this.gain(0);
+    this.musicFade.connect(mg).connect(this.master);
+    this.ch.set('music', mg);
+    this.attachMusic();
 
     for (const id of MATERIAL_ORDER) {
       const g = ctx.createGain();
@@ -233,7 +300,7 @@ export class AudioEngine {
     // recorded nature (synthesis can't fake birds); loaded only when first turned up
     mixCh('forest');
     mixCh('birdsong');
-    this.buildFire(mixCh('fire'));
+    mixCh('fire');
     // pure tones (labelled neutrally in the UI: frequency only, no claims)
     this.osc('sine', 40).connect(mixCh('tone40'));
     this.osc('sine', 136.1).connect(mixCh('tone136'));
@@ -322,15 +389,15 @@ export class AudioEngine {
    * CREDITS.md). The end is crossfaded into the start, so the loop has no seam.
    * Fails quietly (e.g. offline before the file was cached): the channel stays silent.
    */
-  private async ensureRecording(k: 'forest' | 'birdsong') {
+  private async ensureRecording(k: 'forest' | 'birdsong' | 'fire') {
     if (this.recordings.has(k) || !this.ctx) return;
     this.recordings.add(k);
     const ctx = this.ctx;
     try {
-      const res = await fetch(`${import.meta.env.BASE_URL}audio/${k}.m4a`);
+      const res = await fetch(`${import.meta.env.BASE_URL}audio/${k === 'fire' ? 'fireplace' : k}.m4a`);
       if (!res.ok) throw new Error(String(res.status));
       const raw = await ctx.decodeAudioData(await res.arrayBuffer());
-      const fade = Math.min(Math.floor(raw.sampleRate * 2), Math.floor(raw.length / 4));
+      const fade = Math.min(Math.floor(raw.sampleRate * (k === 'fire' ? 6 : 2)), Math.floor(raw.length / 4));
       const len = raw.length - fade;
       const buf = ctx.createBuffer(raw.numberOfChannels, len, raw.sampleRate);
       for (let c = 0; c < raw.numberOfChannels; c++) {
@@ -384,112 +451,6 @@ export class AudioEngine {
     s.connect(f).connect(g).connect(out);
     const b = this.loop(this.nb.brown);
     b.connect(this.filter('lowpass', 220)).connect(this.gain(0.4)).connect(out);
-  }
-
-  // ---- cosy fireplace ----
-  private fireOut: GainNode | null = null;
-  private fireBurst = 0;
-  private fireLog = 0;
-  private fireHiss = 0;
-
-  /** Slow, irregular wandering between lo and hi (no repeating LFO), as a looping control signal. */
-  private wander(param: AudioParam, lo: number, hi: number, rate: number) {
-    const ctx = this.ctx!;
-    const sr = 3000; // the lowest rate every browser accepts
-    const n = sr * 23;
-    const buf = ctx.createBuffer(1, n, sr);
-    const d = buf.getChannelData(0);
-    const steps = Math.max(8, Math.round(23 * rate));
-    const pts = Array.from({ length: steps }, () => Math.random());
-    for (let k = 0; k < n; k++) {
-      const x = (k / n) * steps;
-      const a = Math.floor(x);
-      const f = 0.5 - 0.5 * Math.cos(Math.PI * (x - a));
-      d[k] = lo + (hi - lo) * (pts[a % steps] * (1 - f) + pts[(a + 1) % steps] * f);
-    }
-    param.value = 0;
-    this.loop(buf).connect(param);
-  }
-
-  private buildFire(out: GainNode) {
-    // the hearth: everything passes through a warm, slightly boxy tone, like a brick chimney
-    const hearth = this.filter('lowpass', 4600, 0.4);
-    const brick = this.filter('peaking', 380, 0.8);
-    brick.gain.value = 3.5;
-    hearth.connect(brick).connect(out);
-    const room = this.gain(1);
-    room.connect(hearth);
-    // the body: a low breathing of flame, swelling and sinking with the draught
-    const low = this.gain(0);
-    this.wander(low.gain, 0.24, 0.55, 0.8);
-    this.loop(this.nb.brown).connect(this.filter('lowpass', 180, 0.5)).connect(low).connect(room);
-    // flames lapping softly, left and right apart from each other
-    for (const pan of [-0.4, 0.4]) {
-      const g = this.gain(0);
-      this.wander(g.gain, 0.12, 1.05, 4.4);
-      const f = this.filter('bandpass', 320, 0.7);
-      this.wander(f.frequency, 240, 560, 1.9);
-      this.loop(this.nb.pink).connect(f).connect(g).connect(this.panner(pan, room));
-    }
-    // a breath of air over the embers, barely there
-    const air = this.gain(0);
-    this.wander(air.gain, 0.02, 0.09, 1.2);
-    this.loop(this.nb.pink).connect(this.filter('bandpass', 1400, 0.5)).connect(air).connect(room);
-    this.fireOut = room;
-  }
-
-  /** One snap of wood: a tiny woody knock; larger ones have a little body under them. */
-  private woodSnap(t: number, size: number, pan: number) {
-    const ctx = this.ctx!;
-    const out = this.panner(pan, this.fireOut!);
-    // short by nature, so not stretched like other sounds in a session; only softer
-    const amp = size * (1 - 0.45 * this.calm);
-    const shot = (src: AudioScheduledSourceNode, f: BiquadFilterNode, peak: number, decay: number) => {
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(peak, t + 0.002);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
-      src.connect(f).connect(g).connect(out);
-    };
-    const d = 0.01 + 0.03 * size * Math.random();
-    shot(this.burst(this.nb.pink, t, d + 0.02), this.filter('bandpass', rnd(800, 2300) * (1 - 0.45 * size), rnd(2, 5)), amp * 2.8, d);
-    if (size > 0.35) {
-      const o = ctx.createOscillator();
-      o.frequency.setValueAtTime(rnd(170, 250), t);
-      o.frequency.exponentialRampToValueAtTime(95, t + 0.07);
-      o.start(t);
-      o.stop(t + 0.14);
-      shot(o, this.filter('lowpass', 400), amp * 0.6, 0.1);
-    }
-  }
-
-  private tickFire(now: number, dt: number) {
-    if (!this.fireOut) return;
-    // snaps come in little flurries with quiet between them; most are tiny, few are larger
-    this.fireBurst = Math.max(0, this.fireBurst - dt * 1.6);
-    if (Math.random() < dt * 0.28) this.fireBurst = rnd(0.4, 1);
-    let lambda = (2 + 9 * this.fireBurst) * dt;
-    while (lambda > 0) {
-      if (Math.random() < lambda) this.woodSnap(now + 0.02 + Math.random() * dt, 0.07 + 0.55 * Math.random() ** 5, rnd(-0.5, 0.5));
-      lambda -= 1;
-    }
-    // now and then a log settles: a soft low slump and a run of small snaps
-    if (now > this.fireLog) {
-      if (this.fireLog > 0) {
-        const t = now + 0.05;
-        this.burst(this.nb.brown, t, 0.7).connect(this.filter('lowpass', 240)).connect(this.env(t, 0.1, 0.55, 0.4, this.panner(rnd(-0.3, 0.3), this.fireOut)));
-        for (let i = 0; i < 7; i++) this.woodSnap(t + Math.random() * 0.9, 0.08 + 0.22 * Math.random(), rnd(-0.5, 0.5));
-      }
-      this.fireLog = now + rnd(25, 60);
-    }
-    // sap hissing out of a log, faint
-    if (now > this.fireHiss) {
-      if (this.fireHiss > 0) {
-        const t = now + 0.05, d = rnd(0.9, 2.2);
-        this.burst(this.nb.white, t, d).connect(this.filter('bandpass', rnd(2800, 4000), 1.5)).connect(this.env(t, d * 0.35, d * 0.6, 0.018, this.panner(rnd(-0.5, 0.5), this.fireOut)));
-      }
-      this.fireHiss = now + rnd(12, 32);
-    }
   }
 
   private ear!: AnalyserNode;
@@ -551,7 +512,6 @@ export class AudioEngine {
           .connect(this.env(ti, 0.001, dur, rnd(0.05, 0.16), this.panner(rnd(-0.8, 0.8), this.rainOut)));
       }
     }
-    if (s.mix.fire > 0.01) this.tickFire(now, dt);
     const active = s.session.id !== 'free' && s.session.startedAt != null;
     const b = active ? breathAt(sessionElapsed(s.session.startedAt), s.breathPreset).value : 0;
     // eases in quickly with the breath, and fades out slowly when the session ends
