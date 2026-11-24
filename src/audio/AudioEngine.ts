@@ -23,7 +23,7 @@ import type { MixLevels } from '../state/types';
 
 /** loudest each mixer channel gets at slider 1 (balances very different sources) */
 const CH_MAX: Record<keyof MixLevels, number> = {
-  orb: 1, rain: 0.5, wind: 0.45, waves: 0.55, forest: 0.8, birdsong: 0.6, fire: 1.5, music: 0.9, tone40: 0.22, tone136: 0.07, binaural: 0.06, breath: 1.4,
+  orb: 1, rain: 0.5, wind: 0.45, waves: 0.55, birdsong: 0.6, music: 0.9, tone40: 0.22, tone136: 0.07, binaural: 0.06, breath: 1.4,
 };
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
@@ -139,7 +139,7 @@ export class AudioEngine {
   setMix(levels: MixLevels) {
     this.mix = levels;
     if (!this.ctx) return;
-    for (const k of ['forest', 'birdsong', 'fire'] as const) if (levels[k] > 0) this.ensureRecording(k);
+    if (levels.birdsong > 0) this.ensureRecording('birdsong');
     const t = this.ctx.currentTime;
     this.ch.forEach((g, k) => g.gain.setTargetAtTime(CH_MAX[k] * levels[k], t, 0.3));
   }
@@ -298,9 +298,7 @@ export class AudioEngine {
     this.buildWind(mixCh('wind'));
     this.buildWaves(mixCh('waves'));
     // recorded nature (synthesis can't fake birds); loaded only when first turned up
-    mixCh('forest');
     mixCh('birdsong');
-    mixCh('fire');
     // pure tones (labelled neutrally in the UI: frequency only, no claims)
     this.osc('sine', 40).connect(mixCh('tone40'));
     this.osc('sine', 136.1).connect(mixCh('tone136'));
@@ -389,15 +387,15 @@ export class AudioEngine {
    * CREDITS.md). The end is crossfaded into the start, so the loop has no seam.
    * Fails quietly (e.g. offline before the file was cached): the channel stays silent.
    */
-  private async ensureRecording(k: 'forest' | 'birdsong' | 'fire') {
+  private async ensureRecording(k: 'birdsong') {
     if (this.recordings.has(k) || !this.ctx) return;
     this.recordings.add(k);
     const ctx = this.ctx;
     try {
-      const res = await fetch(`${import.meta.env.BASE_URL}audio/${k === 'fire' ? 'fireplace' : k}.m4a`);
+      const res = await fetch(`${import.meta.env.BASE_URL}audio/${k}.m4a`);
       if (!res.ok) throw new Error(String(res.status));
       const raw = await ctx.decodeAudioData(await res.arrayBuffer());
-      const fade = Math.min(Math.floor(raw.sampleRate * (k === 'fire' ? 6 : 2)), Math.floor(raw.length / 4));
+      const fade = Math.min(Math.floor(raw.sampleRate * 2), Math.floor(raw.length / 4));
       const len = raw.length - fade;
       const buf = ctx.createBuffer(raw.numberOfChannels, len, raw.sampleRate);
       for (let c = 0; c < raw.numberOfChannels; c++) {

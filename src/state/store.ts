@@ -32,7 +32,7 @@ export function saveBreath(id: BreathPresetId) {
 const LEN_KEY = 'break-ball.length';
 const MIX_KEY = 'break-ball.mix';
 export const DEFAULT_MIX: MixLevels = {
-  orb: 0.8, rain: 0, wind: 0, waves: 0, forest: 0, birdsong: 0, fire: 0, music: 0.8, tone40: 0, tone136: 0, binaural: 0, breath: 0.5,
+  orb: 0.8, rain: 0, wind: 0, waves: 0, birdsong: 0, music: 0.8, tone40: 0, tone136: 0, binaural: 0, breath: 0.5,
 };
 /** saved levels for sounds that still exist; anything else is dropped */
 function cleanMix(saved: Partial<MixLevels>): MixLevels {

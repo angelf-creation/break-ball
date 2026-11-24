@@ -14,7 +14,7 @@ export function Wordmark({
 }) {
   return (
     <div className={className}>
-      {/* two-tone headline: emphasis by opacity, never weight (Laginchy has one) */}
+      {/* two-tone headline: emphasis by opacity, never weight (EasyBond has one) */}
       <h1 className="title-shadow font-display text-[26px] leading-none tracking-[0.01em]">
         <span className="text-white">Break</span> <span className="text-white/60">Ball</span>
       </h1>

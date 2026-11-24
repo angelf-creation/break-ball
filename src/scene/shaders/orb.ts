@@ -548,47 +548,56 @@ void main(){
   }
 #endif
 
-  // ---- roots: a branching network growing over a luminous amber ground ----
-  // After the recording: dark red-brown branches creep outward like a river delta,
-  // feathery at the tips, with a glowing white-gold channel running through the trunks.
+  // ---- roots: feathered dark fans advancing over glowing gold ----
+  // After the recording: rust at the young tips, nearly black-red where the fan is old,
+  // fine lit gaps between the fingers, and white-hot channels melting down the trunks.
   // The texture stores WHEN each twig was reached; uGrow sweeps through that order.
 #ifdef G_ROOT
   if (uRoot > 0.002){
     vec3 d = normalize(vDir);
     vec2 rq = discMap(d);
     if (d.z < 0.0) rq = mat2(0.36, -0.93, 0.93, 0.36) * rq; // the far side is turned, so it isn't a mirror
-    // slow undulation: the whole network sways, more toward its tips
     float rl = length(rq);
-    rq += 0.022 * rl * vec2(sin(rq.y * 5.0 + uTime * 0.23), cos(rq.x * 4.0 - uTime * 0.19));
+    rq += 0.014 * rl * vec2(sin(rq.y * 5.0 + uTime * 0.23), cos(rq.x * 4.0 - uTime * 0.19));
     vec2 ruv = rq * 0.47 + 0.5;
+    ruv += 0.0024 * vec2(snoise(rq * 30.0), snoise(rq * 30.0 + 7.3)) + 0.0016 * vec2(snoise(rq * 80.0), snoise(rq * 80.0 + 3.1));  // ragged, inky edges
+    float chan = texture2D(uRootTex, mix(rq * 0.47 + 0.5, ruv, 0.35), 0.5).b;
     vec4 rt = texture2D(uRootTex, ruv);
-    vec4 rb = texture2D(uRootTex, ruv, 3.5);
+    vec4 rb = texture2D(uRootTex, ruv, 3.0);
+    vec4 rw = texture2D(uRootTex, ruv, 5.0);
     float ord = rt.r / max(rt.g, 0.02);
     float ordB = rb.r / max(rb.g, 0.02);
-    float lead = uGrow * 1.12;
-    float seen = (1.0 - smoothstep(lead - 0.05, lead, ord)) * rt.g;
-    float seenB = (1.0 - smoothstep(lead - 0.1, lead, ordB)) * rb.g;
-    float tip = smoothstep(lead - 0.16, lead - 0.02, ord) * seen;  // the advancing front
-    vec3 amber = mix(vec3(0.95, 0.3, 0.025), vec3(0.5, 0.07, 0.005), smoothstep(0.1, 1.0, rl));
-    amber *= 0.75 + 0.25 * fbm(rq * 2.2 + uTime * 0.02);
-    amber *= 0.9 + 0.16 * snoise(rq * 26.0) + 0.1 * snoise(rq * 90.0);  // grain, like lit resin
-    amber += vec3(1.0, 0.6, 0.2) * 0.35 * exp(-rl * rl * 5.0);
-    amber *= 1.0 - 0.6 * clamp(seenB * 1.6, 0.0, 1.0);            // the branches shade the ground around them
-    // relief: light falls across the branches
-    vec2 gr = vec2(texture2D(uRootTex, ruv + vec2(0.0024, 0.0), 1.0).g, texture2D(uRootTex, ruv + vec2(0.0, 0.0024), 1.0).g) - texture2D(uRootTex, ruv, 1.0).g;
-    vec3 bark = mix(vec3(0.085, 0.018, 0.008), vec3(0.3, 0.075, 0.02), clamp(0.5 - (gr.x - gr.y) * 1.6, 0.0, 1.0));
-    float fibre = snoise(vec2(dot(rq, vec2(gr.y, -gr.x) * 40.0 + 1.0) * 14.0, ord * 90.0)) * 0.5 + snoise(rq * 70.0) * 0.5;
-    bark *= 0.8 + 0.4 * fibre;                                     // fibrous, weathered
-    bark = mix(bark, vec3(0.75, 0.22, 0.04), tip * 0.8);
-    float sap = 0.65 + 0.35 * sin(ord * 34.0 - uTime * 0.9);       // light travelling out along the channels
-    float chan = rt.b * seen;
-    vec3 rc = mix(amber, bark, seen * uGrowFade);
-    vec3 glow = vec3(1.0, 0.82, 0.42) * (chan * sap * 1.25 + rb.b * seenB * 0.5) + vec3(1.0, 0.5, 0.12) * tip * 0.35;
-    rc += glow * uGrowFade;
+    float ordW = rw.r / max(rw.g, 0.02);
+    float lead = uGrow * 1.14;
+    float front = 1.0 - smoothstep(lead - 0.07, lead, ord);
+    float seen = front * smoothstep(0.25, 0.85, rt.g) * uGrowFade;
+    float seenB = (1.0 - smoothstep(lead - 0.12, lead, ordB)) * rb.g * uGrowFade;
+    float seenW = (1.0 - smoothstep(lead - 0.18, lead, ordW)) * rw.g * uGrowFade;
+    float young = smoothstep(lead - 0.26, lead - 0.01, ord);
+    // lit ground: gold, warmer where a fan is near
+    vec3 gold = mix(vec3(1.0, 0.56, 0.07), vec3(0.92, 0.37, 0.02), smoothstep(0.1, 1.05, rl + 0.25 * snoise(rq * 0.9 + uTime * 0.012)));
+    gold *= 0.96 + 0.05 * snoise(rq * 60.0) + 0.05 * snoise(rq * 150.0);
+    gold = mix(gold, vec3(0.95, 0.3, 0.06), clamp(seenW * 1.3, 0.0, 0.8));
+    gold = mix(gold, vec3(0.7, 0.13, 0.008), clamp(seenB * 1.1 - 0.15, 0.0, 0.55));
+    // the fan itself, deepening with age
+    float tone = snoise(rq * 3.0) * 0.5 + snoise(rq * 9.0) * 0.25;
+    vec3 rust = vec3(0.3, 0.045, 0.003), deep = vec3(0.06, 0.005, 0.001);
+    float age = (1.0 - young) * smoothstep(0.25, 0.7, seenB + 0.12 * tone);
+    vec3 fan = mix(rust, deep, age * (0.86 + 0.14 * tone));
+    fan = mix(fan, rust, smoothstep(0.95, 0.4, rt.g) * 0.6);       // thin at the edges, so light comes through
+    vec3 rc = mix(gold, fan, seen * (0.97 - 0.2 * young));
+    // molten channels: white in the middle, contour lines of gold and rust at the banks
+    float heat = chan * front * uGrowFade + 0.22 * chan * snoise(rq * 12.0 + vec2(uTime * 0.05, 0.0));
+    float flow = 0.85 + 0.15 * sin(ord * 30.0 - uTime * 0.8);
+    float bank = smoothstep(0.08, 0.2, heat);
+    vec3 melt = mix(vec3(0.5, 0.12, 0.008), vec3(1.0, 0.5, 0.06), 0.5 + 0.5 * sin(heat * 21.0 + snoise(rq * 8.0) * 1.2));
+    melt = mix(melt, vec3(1.25, 1.12, 0.8), smoothstep(0.56, 0.82, heat) * flow);
+    rc = mix(rc, melt, bank);
+    rc += vec3(1.0, 0.5, 0.1) * rb.b * seenB * 0.25;               // and their light on the fan around them
     float wrapR = (dot(N, L) + 0.9) / 1.9;
-    rc *= 0.5 + 0.6 * wrapR;
-    emission += amber * (1.0 - seen * uGrowFade) * 0.28 * uRoot;
-    rc += vec3(1.0, 0.42, 0.1) * pow(1.0 - NdV, 2.5) * 0.4;
+    rc *= 0.58 + 0.55 * wrapR;
+    emission += gold * (1.0 - seen) * 0.16 * uRoot;
+    rc += vec3(1.0, 0.42, 0.1) * pow(1.0 - NdV, 2.5) * 0.3;
     body = mix(body, rc, uRoot);
   }
 #endif

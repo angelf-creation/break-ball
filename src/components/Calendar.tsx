@@ -74,7 +74,7 @@ export function CalendarCard() {
           <path d="M8 11V8a4 4 0 018 0v3" />
         </svg>
         <span>
-          <strong>Stored on this device only.</strong> Your breaks are nobody else&rsquo;s business&mdash;your progress stays purely yours.
+          Your progress lives on this device
         </span>
       </p>
 

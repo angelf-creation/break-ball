@@ -57,7 +57,7 @@ export function BreathIndicator() {
 
   return (
     <>
-      {/* phase word: Laginchy, lowercase, low opacity, centred on the orb (CSS vars from OrbScene) */}
+      {/* phase word: EasyBond, lowercase, low opacity, centred on the orb (CSS vars from OrbScene) */}
       <div
         aria-hidden
         className={`pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-1500 ${

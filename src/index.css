@@ -1,10 +1,10 @@
 /* Fonts are self-hosted from public/fonts (no CDN).
-   Laginchy has ONE weight: hierarchy comes from size and opacity, never weight.
+   EasyBond has ONE weight: hierarchy comes from size and opacity, never weight.
    Satoshi Regular/Bold/Italic/BoldItalic share one family, so font-weight and
    font-style switch normally. */
 @font-face {
-  font-family: 'Laginchy';
-  src: url('/fonts/Laginchy-Regular.woff2') format('woff2');
+  font-family: 'EasyBond';
+  src: url('/fonts/EasyBond-Regular.otf') format('opentype');
   font-weight: 400;
   font-style: normal;
   font-display: swap;

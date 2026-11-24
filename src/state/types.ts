@@ -70,10 +70,8 @@ export interface MixLevels {
   rain: number;
   wind: number;
   waves: number;
-  forest: number; // CC0 field recording (see CREDITS.md)
   birdsong: number; // CC0 field recording (see CREDITS.md)
   music: number; // the visitor's own song
-  fire: number; // CC0 field recording (see CREDITS.md)
   tone40: number; // pure 40 Hz tone
   tone136: number; // pure 136.1 Hz tone
   binaural: number; // 6 Hz difference between ears (headphones)

@@ -19,7 +19,7 @@ interface OptionProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   swatch?: string;
   variant?: 'row' | 'chip';
   hint?: string;
-  /** set the label in Laginchy (artist names) */
+  /** set the label in EasyBond (artist names) */
   display?: boolean;
 }
 

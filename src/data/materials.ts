@@ -239,7 +239,7 @@ export const MATERIALS: MaterialPreset[] = [
     },
   },
   {
-    id: 'root', label: 'Root', hint: 'Roots branching out over amber light', group: 'organic', sessionSafe: true,
+    id: 'root', label: 'Root', hint: 'Dark feathered roots spreading over golden light', group: 'organic', sessionSafe: true,
     swatch: 'linear-gradient(135deg,#3a0d05,#f07a18,#ffe0a0)',
     gen: { ...NONE, root: 1, matte: 0.8 },
     physics: { rippleK: 12, rippleSpeed: 0.4, rippleDecay: 2, rippleAmp: 0.005, jelly: 0, fluid: 0 },
