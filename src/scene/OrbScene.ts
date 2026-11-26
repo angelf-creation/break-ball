@@ -172,6 +172,8 @@ export class OrbScene {
     uHoneyBub: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, -1)) },
     uHoneyT: { value: 0 },
     uSceneArt: { value: new THREE.Vector4() },
+    uBreathGlow: { value: new THREE.Vector4() },
+    uBreathSpin: { value: 0 },
     uWrap: { value: 0 },
     uInk: { value: 0 },
     uLava: { value: 0 },
@@ -321,9 +323,9 @@ export class OrbScene {
   /** ferrofluid: the magnet (a held touch) and how strongly the field lifts the liquid */
   private ferroAmp = 0;
   private ferroFocus = 0;
-  /** Liquid Gold: a thread being pulled out (1) or falling back after letting go (2), in orb radii */
+  /** Honey: a thread being pulled out (1) or falling back after letting go (2), in orb radii */
   private thread = { state: 0, ax: 0, ay: 0, ex: 0, ey: 0, tx: 0, ty: 0, life: 0, sag: 0, w: 0, creakAt: -9, dir: new THREE.Vector3(0, 0, 1) };
-  /** Liquid Gold bubbles: their clock, the next slot, the next one from the bottom, which have already surfaced */
+  /** Honey bubbles: their clock, the next slot, the next one from the bottom, which have already surfaced */
   private honeyT = 0;
   private honeyBubIdx = 0;
   private honeyBubNext = 6;
@@ -346,11 +348,14 @@ export class OrbScene {
     return { x: v.x + 0.015 * Math.sin(age * 0.5 + v.w * 7), y: v.y + (0.012 + 6 * v.z * v.z) * age };
   }
   /** Lava Lamp: the blobs (position, velocity, temperature, size), where the finger warmed the liquid */
-  private blobs = [0.3, 0.2, 0.16, 0.12].map((r, i) => ({
-    p: new THREE.Vector3(Math.sin(i * 2.4) * 0.3, -0.5 + 0.25 * i, Math.cos(i * 2.4) * 0.2),
+  private blobs = [0.3, 0.2, 0.17, 0.13].map((r, i) => ({
+    p: new THREE.Vector3(Math.sin(i * 2.4) * 0.3, -0.45 + 0.3 * i, Math.cos(i * 2.4) * 0.35),
     v: new THREE.Vector3(),
     temp: i % 2 ? 0.7 : 0.3,
     r,
+    /** the stretch, eased: its direction and how far */
+    sd: new THREE.Vector3(0, 1, 0),
+    s: 1,
   }));
   private heat = new THREE.Vector4(0, 0, 0, 0);
   private blobTouching = new Set<string>();
@@ -361,6 +366,10 @@ export class OrbScene {
   private inkStray = 9;
   private inkTapAt = -9;
   private inkLast: { x: number; y: number; t: number } | null = null;
+  /** session glow: its colour (eased between warm and cool) and its slow turn */
+  private breathCol = new THREE.Color(0.3, 0.5, 1);
+  private breathWarm = new THREE.Color(1.0, 0.5, 0.22);
+  private breathCool = new THREE.Color(0.22, 0.48, 1.0);
   /** Bubble Wrap: the lattice, and per bubble its phase (0 inflated, 1 popping, 2 waiting, 3 refilling) and clock */
   private wrapL: ReturnType<typeof makeWrapLattice> | null = null;
   private wrapPhase = new Uint8Array(0);
@@ -421,35 +430,45 @@ export class OrbScene {
     const U = this.U;
     const h = this.heat;
     h.w = damp(h.w, 0, 0.35, dt);
+    const tmp = new THREE.Vector3();
     this.blobs.forEach((b, i) => {
-      // heat from the lamp below, cooling near the surface, and the finger's warmth
-      if (b.p.y < -0.5) b.temp += dt * 0.06;
-      if (b.p.y > 0.45) b.temp -= dt * 0.07;
+      // heat from the lamp below, cooling near the top, and the finger's warmth
+      b.temp += dt * 0.05 * (1 - Math.min(1, Math.max(0, (b.p.y + 0.45) / 0.25)));
+      b.temp -= dt * 0.06 * Math.min(1, Math.max(0, (b.p.y - 0.35) / 0.25));
       b.temp += (0.5 - b.temp) * dt * 0.01;
-      const toH = new THREE.Vector3(h.x, h.y, h.z).sub(b.p);
-      const near = Math.exp(-toH.lengthSq() / 0.18) * h.w;
+      tmp.set(h.x, h.y, h.z).sub(b.p);
+      const near = Math.exp(-tmp.lengthSq() / 0.18) * h.w;
       b.temp = Math.min(1, b.temp + near * dt * 0.25);
-      b.v.addScaledVector(toH, near * dt * 0.05);
-      // buoyancy, viscous drag, a slow sideways wander
-      b.v.y += (b.temp - 0.5) * 0.05 * dt;
+      b.v.addScaledVector(tmp, near * dt * 0.05);
+      // buoyancy, viscous drag, a slow wander in all three directions (so they pass in front of
+      // and behind each other)
+      b.v.y += (b.temp - 0.5) * 0.045 * dt;
       b.v.x += Math.sin(this.floatClock * 0.07 + i * 2.1) * 0.004 * dt;
-      b.v.z += Math.cos(this.floatClock * 0.05 + i * 1.3) * 0.003 * dt;
+      b.v.z += Math.cos(this.floatClock * 0.05 + i * 1.3) * 0.006 * dt;
+      // the glass and the pool push back softly instead of a hard wall, so nothing ever jumps
+      const lim = 0.88 - b.r;
+      const len = b.p.length();
+      if (len > lim * 0.85) b.v.addScaledVector(b.p, (-(len - lim * 0.85) / Math.max(len, 1e-4)) * 0.6 * dt);
+      const top = 0.78 - b.r, bottom = -0.66;
+      if (b.p.y > top) b.v.y -= (b.p.y - top) * 0.6 * dt;
+      if (b.p.y < bottom) b.v.y += (bottom - b.p.y) * 0.6 * dt;
+      // blobs make room for each other a little
+      this.blobs.forEach((o, j) => {
+        if (j === i) return;
+        tmp.copy(b.p).sub(o.p);
+        const dd = tmp.length(), want = (b.r + o.r) * 0.75;
+        if (dd < want && dd > 1e-4) b.v.addScaledVector(tmp, ((want - dd) / dd) * 0.08 * dt);
+      });
       b.v.multiplyScalar(Math.exp(-dt * 0.9));
-      b.p.addScaledVector(b.v, dt);
-      // the bowl: stay inside the glass and under the liquid's surface
-      const lim = 0.9 - b.r;
-      const horiz = Math.hypot(b.p.x, b.p.z);
-      if (horiz > lim * 0.9) {
-        const k = (lim * 0.9) / horiz;
-        b.p.x *= k;
-        b.p.z *= k;
-      }
-      b.p.y = Math.max(-0.66, Math.min(0.8 - b.r, b.p.y));
-      if (b.p.length() > lim) b.p.setLength(lim);
-      U.uBlobs.value[i].set(b.p.x, b.p.y, b.p.z, b.r);
       const sp = b.v.length();
-      const dir = sp > 1e-5 ? b.v.clone().divideScalar(sp) : new THREE.Vector3(0, 1, 0);
-      U.uBlobS.value[i].set(dir.x, dir.y, dir.z, 1 + Math.min(0.9, sp * 14));
+      if (sp > 0.06) b.v.multiplyScalar(0.06 / sp);
+      b.p.addScaledVector(b.v, dt);
+      if (b.p.length() > 0.95 - b.r) b.p.setLength(0.95 - b.r); // only a safety net
+      // the stretch follows the motion slowly: no flipping when a blob turns round
+      if (sp > 1e-4) b.sd.lerp(tmp.copy(b.v).divideScalar(sp), 1 - Math.exp(-dt * 0.8 * Math.min(1, sp * 60))).normalize();
+      b.s = damp(b.s, 1 + Math.min(0.7, sp * 12), 0.8, dt);
+      U.uBlobs.value[i].set(b.p.x, b.p.y, b.p.z, b.r);
+      U.uBlobS.value[i].set(b.sd.x, b.sd.y, b.sd.z, b.s);
     });
     // a soft bloop now and then, as blobs meet or pinch apart
     for (let i = 0; i < this.blobs.length; i++)
@@ -484,6 +503,8 @@ export class OrbScene {
   private gust = 0;
   private gustAt = 0;
   private gustT = 0;
+  /** Snowstorm: how far a drag has turned the wind (eases back to 0) */
+  private snowPush = 0;
   private swirl = new THREE.Vector3();
   /** Sky: the sun's elevation (eased), its direction in the ball, when the next bird may sing */
   private sunEl = 20;
@@ -864,7 +885,7 @@ export class OrbScene {
       this.U.uFrostTouch.value[this.frostIdx].set(dir.x, dir.y, dir.z, this.patternTime);
       this.frostIdx = (this.frostIdx + 1) % this.U.uFrostTouch.value.length;
     }
-    // Liquid Gold: a touch lets air bubbles go; they rise slowly through the gold
+    // Honey: a touch lets air bubbles go; they rise slowly through the gold
     if (this.gen.honey > 0.5) {
       const sp = this.screenOf(dir);
       if (strength > 0.8) {
@@ -876,7 +897,7 @@ export class OrbScene {
     if (this.gen.bubble > 0.3) {
       const bt = this.U.uBubbleTouch.value;
       if (this.bubbleTwist * this.bubbleTwist < 0.5) bt.set(dir.x, dir.y, dir.z, this.bubbleTwist);
-      this.bubbleStir = Math.min(1.5, this.bubbleStir + 0.6 * strength * strength);
+      this.bubbleStir = Math.min(2, this.bubbleStir + 0.9 * strength);
     }
     // Snowstorm: the finger stirs the air; the flakes swirl softly round it (Sky: wisps curl)
     if (this.gen.snow > 0.3 || this.gen.sky > 0.3) {
@@ -967,8 +988,9 @@ export class OrbScene {
     d.y = e.clientY;
     d.t = e.timeStamp;
     this.idle = 0;
-    // Liquid Gold resists: the ball turns less, and the thread's end follows the finger anywhere
+    // Honey resists: the ball turns less, and the thread's end follows the finger anywhere
     this.turn(dx * (1 - 0.6 * this.gen.honey), dy * (1 - 0.6 * this.gen.honey));
+    if (this.gen.snow > 0.5) this.snowPush = Math.max(-0.06, Math.min(0.06, this.snowPush + dx * 0.05));
     if (this.gen.ink > 0.5 && this.ink && d.onBall) {
       // stirring: the water follows the finger, curling into eddies behind it
       const f = this.fingerOrb(e.clientX, e.clientY);
@@ -1273,6 +1295,14 @@ export class OrbScene {
     const up = Math.min(1, since / 3.5);
     const swell = since < 14 ? up * up * (3 - 2 * up) * (1 - Math.min(1, Math.max(0, (since - 5) / 9)) ** 2) : 0;
     this.openGlow = damp(this.openGlow, swell * 0.5, 1.4, dt);
+    // the session glow: warm while breathing in (and holding), cool while breathing out (and resting)
+    {
+      const ph = active ? breathAt(sessionElapsed(s.session.startedAt), s.breathPreset).phase : 'rest';
+      const target = ph === 'inhale' || ph === 'hold' ? this.breathWarm : this.breathCool;
+      this.breathCol.lerp(target, 1 - Math.exp(-dt * 0.9));
+      U.uBreathSpin.value += dt * (s.comfort || s.reducedMotion ? 0.05 : 0.11);
+      U.uBreathGlow.value.set(this.breathCol.r, this.breathCol.g, this.breathCol.b, this.sessionW * (s.comfort ? 0.07 : 0.11));
+    }
     const glow = Math.min(0.9, this.openGlow + this.sessionW * (0.1 + 0.1 * this.breath));
     // the pillow's hollow: sinks quickly under the hand, fills out slowly
     this.dent = damp(this.dent, this.pressed ? 1 : 0, this.pressed ? 6 : 0.9, dt);
@@ -1474,7 +1504,7 @@ export class OrbScene {
       // the stir (stronger the faster the drag) winds the bands into an oily spiral round the
       // touch; it relaxes back into the normal flow over two or three seconds
       this.bubbleStir = damp(this.bubbleStir, 0, 1.4, dt);
-      this.bubbleTwist += dt * this.pace * this.bubbleStir * 2.2;
+      this.bubbleTwist += dt * this.pace * this.bubbleStir * 3.2;
       this.bubbleTwist *= Math.exp(-dt * 0.8);
       U.uBubbleTouch.value.w = this.bubbleTwist;
     }
@@ -1482,14 +1512,13 @@ export class OrbScene {
     U.uSnow.value = g.snow;
     U.uStars.value = g.stars;
     if (g.snow > 0.001) {
-      // a calm storm: the wind swings slowly left and right in long waves (about 17 s and 41 s),
-      // never violent; the snow follows it in curtains and the sound swells with it
+      // a calm storm: the snow drifts one way, gently; a drag across the ball turns it for a
+      // while, then it eases back. The wind's level (for the sound) breathes slowly.
       this.gustT += dt * this.pace * (reduced ? 0.5 : 1);
-      const tau = Math.PI * 2;
-      const wave = 0.65 * Math.sin((this.gustT * tau) / 17) + 0.35 * Math.sin((this.gustT * tau) / 41 + 1);
-      const vel = 0.012 + 0.035 * wave;
+      this.snowPush = damp(this.snowPush, 0, 0.25, dt);
+      const vel = 0.008 + this.snowPush;
       this.snowWind += dt * this.pace * vel * (reduced ? 0.5 : 1);
-      this.gust = damp(this.gust, Math.abs(wave), 1.5, dt);
+      this.gust = damp(this.gust, 0.35 + 0.25 * Math.sin((this.gustT * Math.PI * 2) / 23) + Math.min(0.4, Math.abs(this.snowPush) * 6), 1.5, dt);
       U.uSnowWind.value.set(this.snowWind, vel * 5);
       this.gustAt -= dt;
       if (this.gustAt <= 0) {

@@ -22,7 +22,7 @@ export function Sessions() {
       </h2>
       <div>
         <Label className="mb-2.5">Breath</Label>
-        <div role="radiogroup" aria-label="Breathing pattern" className="grid grid-cols-3 gap-1.5">
+        <div role="radiogroup" aria-label="Breathing pattern" className="grid grid-cols-4 gap-1.5">
           {BREATH_PRESETS.map((p) => (
             <Option
               key={p.id}

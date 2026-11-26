@@ -69,7 +69,7 @@ export interface GeneratorMix {
   sky: number;
   /** frost ferns growing over a sunlit window */
   frost: number;
-  /** Liquid Gold: clear honey, coiling folds, rising air bubbles, sticky threads */
+  /** Honey: clear honey, coiling folds, rising air bubbles, sticky threads */
   honey: number;
   /** Snowstorm: a lamplit night street in perspective, powder snow in slow curtains (night backdrop) */
   snow: number;
@@ -102,7 +102,7 @@ export interface MaterialPhysics {
   spring?: number;
 }
 
-export type MaterialGroupId = 'light' | 'glass' | 'mineral' | 'soft' | 'organic' | 'atmosphere' | 'play';
+export type MaterialGroupId = 'light' | 'glass' | 'mineral' | 'soft' | 'organic' | 'atmosphere';
 
 export interface MaterialPreset {
   id: MaterialId;
@@ -124,12 +124,11 @@ export interface MaterialPreset {
 
 export const MATERIAL_GROUPS: { id: MaterialGroupId; label: string }[] = [
   { id: 'light', label: 'Light' },
-  { id: 'glass', label: 'Glass & Liquid' },
+  { id: 'glass', label: 'Fluid' },
   { id: 'mineral', label: 'Mineral' },
   { id: 'soft', label: 'Soft' },
   { id: 'organic', label: 'Organic' },
   { id: 'atmosphere', label: 'Atmosphere' },
-  { id: 'play', label: 'Toy & Play' },
 ];
 
 export const MATERIALS: MaterialPreset[] = [
@@ -171,7 +170,7 @@ export const MATERIALS: MaterialPreset[] = [
     id: 'bubble', label: 'Soap Bubble', hint: 'A floating soap film, colour bands flowing as it drains; touch it and it dents and wobbles', group: 'glass', sessionSafe: true,
     swatch: 'radial-gradient(circle at 40% 35%,#ffcf6a,#d43ad6 35%,#2e7bff 60%,#0a0612 85%)',
     gen: { ...NONE, bubble: 1 },
-    physics: { rippleK: 8, rippleSpeed: 0.4, rippleDecay: 1.2, rippleAmp: 0.014, jelly: 0.55, fluid: 0.2, spring: 20 },
+    physics: { rippleK: 7, rippleSpeed: 0.45, rippleDecay: 1.1, rippleAmp: 0.034, jelly: 0.85, fluid: 0.2, spring: 18 },
     sound: {
       // airy micro-shimmer; a touch is a soft, wet tick, never a pop
       bed: [
@@ -184,7 +183,7 @@ export const MATERIALS: MaterialPreset[] = [
   },
   {
     // liquid gold: clear honey held up to the light, folding on itself, air bubbles rising slowly
-    id: 'honey', label: 'Liquid Gold', hint: 'Clear liquid gold; drag to pull sticky threads, touch to let bubbles rise', group: 'glass', sessionSafe: true,
+    id: 'honey', label: 'Honey', hint: 'Clear golden honey; drag to pull sticky threads, touch to let bubbles rise', group: 'glass', sessionSafe: true,
     swatch: 'radial-gradient(circle at 40% 35%,#fff3b0,#ffc22e 35%,#d97a06 70%,#5a2402)',
     gen: { ...NONE, honey: 1 },
     physics: { rippleK: 5, rippleSpeed: 0.12, rippleDecay: 0.9, rippleAmp: 0.016, jelly: 0.6, fluid: 0.45, spring: 9 },
@@ -436,8 +435,8 @@ export const MATERIALS: MaterialPreset[] = [
         { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 420, q: 0.6 }, gain: 0.008, lfo: { target: 'gain', rate: 0.05, depth: 0.004 } },
         { kind: 'tones', wave: 'sine', freqs: [196, 293.66], levels: [1, 0.4], filter: { type: 'lowpass', freq: 400 }, gain: 0.018, swell: { rate: 0.02, depth: 0.3 } },
       ],
-      // a falling star: fairy glitter, a quick run of tiny bells that fades with the streak
-      event: { voice: 'sparkle', notes: [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51, 1567.98], count: [7, 6], gap: 0.07, decay: 0.9, amp: 0.022 },
+      // a falling star: just a soft, airy whoosh
+      event: { voice: 'swell', color: 'pink', dur: [0.9, 0.9], sweep: [380, 1500, 300], amp: 0.018 },
       // falling stars are timed by the scene, which plays this voice; no extra ambient ones
       rate: 0.0001,
     },
@@ -455,7 +454,7 @@ export const MATERIALS: MaterialPreset[] = [
   },
   {
     // play mode only: popping is all sharp little onsets, never for a session
-    id: 'wrap', label: 'Bubble Wrap', hint: 'Pop the bubbles: tap one, or run your finger across; they slowly fill again', group: 'play', sessionSafe: false,
+    id: 'wrap', label: 'Bubble Wrap', hint: 'Pop the bubbles: tap one, or run your finger across; they slowly fill again', group: 'atmosphere', sessionSafe: false,
     swatch: 'radial-gradient(circle at 35% 30%,#ffffff,#d8ecff 30%,#9cc4ec 65%,#5e86b8)',
     gen: { ...NONE, wrap: 1 },
     physics: { rippleK: 26, rippleSpeed: 0.9, rippleDecay: 3.5, rippleAmp: 0.008, jelly: 0.04, fluid: 0 },

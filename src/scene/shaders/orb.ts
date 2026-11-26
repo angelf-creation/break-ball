@@ -54,8 +54,8 @@ uniform float uGrowFade;    // root: fades the old network before the next one s
 uniform float uSss;     // pure subsurface (marshmallow)
 uniform float uCreature; // 0..1: the skin gives way to a modelled scene (scene/creatures)
 uniform float uBubble;  // soap bubble film
-uniform float uHoney;   // Liquid Gold
-uniform vec4 uHoneyBub[8]; // rising bubbles (Liquid Gold, Lava Lamp): xy = where (view disc), z = radius, w = when (uHoneyT), < 0 unused
+uniform float uHoney;   // Honey
+uniform vec4 uHoneyBub[8]; // rising bubbles (Honey, Lava Lamp): xy = where (view disc), z = radius, w = when (uHoneyT), < 0 unused
 uniform float uHoneyT;     // their clock
 uniform float uLava;      // Lava Lamp
 uniform float uSnow;    // Snowstorm
@@ -459,17 +459,18 @@ float fbm2s(vec2 p){ return 0.66 * snoise(p) + 0.34 * snoise(p * 2.1 + 17.1); }
 // ~2700 K tungsten in linear light: warm white, not the orange of sodium lamps
 const vec3 LAMP_C = vec3(1.0, 0.52, 0.19);
 
-// A night street in true perspective, seen inside the orb (s = position relative to the
-// vanishing point, in units of the view's height): the road runs away to the vanishing point, with a row of lamps down each side getting smaller, house fronts, tyre tracks in the
-// snow, and fog swallowing the far end. glow returns how much lamp light is in the air here.
+// A cosy snowy street at night, in true perspective, seen inside the orb (s = position relative
+// to the vanishing point, in units of the view's height). Night-blue and quiet: the road runs
+// away into fog between dark houses, one street lamp lights it, its glow hanging in the fog
+// and pooling warm on the snow. glow returns how much lamp light is in the air here.
 vec3 snowStreet(vec2 s, out float glow){
   const float f = 0.9;      // focal length, in screen heights
   const float ch = 1.7;     // eye height, metres
-  vec3 fogC = vec3(0.013, 0.011, 0.011);
-  // snowy sky: a low cloud lit faintly by the town, brighter toward the street's end
-  vec3 col = mix(vec3(0.008, 0.007, 0.0075), vec3(0.0012, 0.0013, 0.002), smoothstep(0.0, 0.45, s.y));
+  vec3 fogC = vec3(0.006, 0.009, 0.02);
+  // the sky: barely there, a deep night blue
+  vec3 col = mix(vec3(0.008, 0.012, 0.026), vec3(0.002, 0.003, 0.009), smoothstep(0.0, 0.45, s.y));
   float Zs = 200.0;
-  // house fronts down both sides
+  // house fronts down both sides, a few warm windows
   float side = s.x >= 0.0 ? 1.0 : -1.0;
   float Zw = 8.5 * f / max(abs(s.x), 1e-4);
   float Yw = ch + s.y * Zw / f;
@@ -479,62 +480,46 @@ vec3 snowStreet(vec2 s, out float glow){
     Zs = Zw;
     vec2 wc = floor(vec2(Zw / 2.6, Yw / 2.8));
     vec2 wf = fract(vec2(Zw / 2.6, Yw / 2.8));
-    float win = step(0.8, hash12(wc + side * 17.0)) * step(0.25, wf.x) * step(wf.x, 0.75) * step(0.3, wf.y) * step(wf.y, 0.8) * step(2.0, Yw);
-    col = vec3(0.0018, 0.0017, 0.002) + vec3(1.0, 0.6, 0.25) * win * (0.018 + 0.012 * hash12(wc + 5.0));
-    col += vec3(0.012) * smoothstep(0.12, 0.0, wf.y) * step(0.25, wf.x) * step(wf.x, 0.75) * step(2.0, Yw) * step(0.8, hash12(wc + side * 17.0)); // snow on the sills
-    col += vec3(0.02, 0.02, 0.024) * smoothstep(Hb - 0.25, Hb, Yw);                                   // snow along the roof edge
-    // light from the lamps on this side
-    float zk = fract((Zw - (side > 0.0 ? 6.0 : 13.0)) / 14.0) - 0.5;
-    col += LAMP_C * 0.025 * exp(-zk * zk * 14.0) * exp(-sq(Yw - 4.5) / 30.0);
+    float lit = step(0.86, hash12(wc + side * 17.0));
+    float pane = step(0.25, wf.x) * step(wf.x, 0.75) * step(2.0, Yw);
+    float win = lit * pane * step(0.3, wf.y) * step(wf.y, 0.8);
+    col = vec3(0.0016, 0.002, 0.004) + vec3(1.0, 0.6, 0.25) * win * (0.012 + 0.01 * hash12(wc + 5.0));
+    col += vec3(0.008, 0.011, 0.02) * smoothstep(0.12, 0.0, wf.y) * pane;            // snow on the sills
+    col += vec3(0.014, 0.018, 0.03) * smoothstep(Hb - 0.25, Hb, Yw);                  // snow along the roof edge
   }
-  // the ground: snow on the road and pavements, tyre tracks, pools of lamplight
+  // the ground: snow on the road and pavements, tyre tracks, the lamp's warm pool
   if (s.y < 0.0){
     float Zg = ch * f / -s.y;
     if (Zg < Zs){
       Zs = Zg;
       float X = s.x * Zg / f;
-      vec3 g = vec3(0.008, 0.0085, 0.011);
+      vec3 g = vec3(0.009, 0.012, 0.022);
       float tracks = exp(-sq((abs(X) - 1.3) / 0.28)) + 0.6 * exp(-sq((abs(X) - 2.9) / 0.3));
-      g *= 1.0 - 0.35 * tracks * step(abs(X), 4.0);
+      g *= 1.0 - 0.3 * tracks * step(abs(X), 4.0);
       g *= 0.9 + 0.1 * snoise(vec2(X * 3.0, Zg * 0.8));
-      g += vec3(0.01) * smoothstep(0.15, 0.0, abs(abs(X) - 4.1));        // the kerb, drifted over
-      float pool = 0.0;
-      for (int k = 0; k < 2; k++){
-        float sx = k == 0 ? 5.0 : -5.0, z0 = k == 0 ? 6.0 : 13.0;
-        float zn = z0 + 14.0 * max(0.0, floor((Zg - z0) / 14.0 + 0.5));
-        float d2 = sq(X - sx) + sq(Zg - zn);
-        pool += 1.0 / pow(1.0 + d2 / 10.0, 1.5);
-      }
-      col = g + LAMP_C * pool * 0.12;
+      g += vec3(0.006, 0.008, 0.014) * smoothstep(0.15, 0.0, abs(abs(X) - 4.1));
+      g += LAMP_C * 0.22 / pow(1.0 + (sq(X - 3.6) + sq(Zg - 9.0)) / 7.0, 1.6);
+      col = g;
     }
   }
-  // fog swallows the far end, glowing a little where the lamps are
-  float fogK = 1.0 - exp(-Zs / 38.0);
-  col = mix(col, fogC + LAMP_C * 0.006, fogK);
-  col += LAMP_C * 0.014 * exp(-length(s * vec2(0.6, 1.4)) * 4.0);          // the town's glow at the far end
-  // the lamps: posts and warm heads, smaller and dimmer into the distance
-  glow = 0.0;
-  for (int k = 0; k < 24; k++){
-    float sd = k < 12 ? 1.0 : -1.0;
-    float kk = float(k < 12 ? k : k - 12);
-    float Z = (sd > 0.0 ? 6.0 : 13.0) + 14.0 * kk;
-    float sx = 5.0 * sd * f / Z, sy = (5.4 - ch) * f / Z, gy = -ch * f / Z;
-    float fade = exp(-Z / 55.0);
-    float pw = 0.07 * f / Z;
-    if (abs(s.x - sx) < pw && s.y > gy && s.y < sy && Z < Zs + 1.0){
-      col = vec3(0.0015) + LAMP_C * 0.03 * exp(-(sy - s.y) / (0.8 * f / Z)) * fade + fogC * (1.0 - exp(-Z / 38.0));
-    }
-    vec2 dl = s - vec2(sx - 0.35 * sd * f / Z, sy);                       // the head hangs from a short arm
-    float r0 = 0.22 * f / Z;
-    float dd = dot(dl, dl) / (r0 * r0);
-    float head = exp(-dd) * 1.6 + 0.35 * exp(-sqrt(dd) * 0.45) + 0.06 * exp(-sqrt(dd) * 0.12);
-    glow += head * fade;
-  }
-  col += LAMP_C * glow * 0.42;
+  col = mix(col, fogC, 1.0 - exp(-Zs / 30.0));
+  // the one lamp: its post, its head, and its light hanging in the snowy air
+  const float LZ = 9.0, LX = 4.6;
+  float sx = LX * f / LZ, sy = (5.3 - ch) * f / LZ, gy = -ch * f / LZ;
+  if (abs(s.x - sx) < 0.07 * f / LZ && s.y > gy && s.y < sy) col = vec3(0.002, 0.0025, 0.004) + LAMP_C * 0.03 * exp(-(sy - s.y) / 0.25);
+  vec2 hd = s - vec2(sx - 0.4 * f / LZ, sy);
+  float r0 = 0.24 * f / LZ;
+  float dd = length(hd) / r0;
+  glow = exp(-dd * dd) * 1.4 + 0.3 * exp(-dd * 0.5) + 0.08 * exp(-dd * 0.12);
+  // a soft cone of light falling from it through the fog
+  float below = sy - s.y;
+  float cone = smoothstep(0.0, 0.05, below) * (1.0 - smoothstep(r0 * 0.6 + below * 0.55, r0 * 1.4 + below * 0.9, abs(hd.x)));
+  glow += cone * 0.1 * exp(-below * 1.5) * step(gy, s.y);
+  col += LAMP_C * glow * 0.4;
   return col;
 }
 
-// Fine powder snow in slow, swaying curtains, in orb radii around the orb (o). Near flakes are big
+// Fine powder snow drifting one way (a drag turns it for a while), in orb radii around the orb (o). Near flakes are big
 // and out of focus, mid ones sharp, the far ones tiny glitter lost in the fog; flakes passing
 // near a lamp catch its light and glint for a moment. glow = lamp light in the air here.
 vec3 snowfall(vec2 o, float glow){
@@ -545,14 +530,14 @@ vec3 snowfall(vec2 o, float glow){
   float cs = cos(swA), sn = sin(swA);
   o = uSwirl.xy + mat2(cs, -sn, sn, cs) * sw;
   // long curtains swaying left and right in slow waves
-  float curtain = 0.22 * sin(o.y * 0.7 + t * 0.16) + 0.1 * sin(o.y * 1.6 - t * 0.11 + 1.3);
-  vec3 lit = vec3(0.035, 0.04, 0.05) + LAMP_C * glow * 1.8;
+  float curtain = 0.0;   // it drifts one way only; a drag turns it for a while (uSnowWind)
+  vec3 lit = vec3(0.022, 0.03, 0.05) + LAMP_C * glow * 2.0;
   vec3 c = vec3(0.0);
   for (int i = 0; i < 4; i++){
     float fi = float(i);
     // 0 near bokeh, 1 mid sharp, 2 fine powder, 3 far glitter
     float cells = i == 0 ? 1.7 : i == 1 ? 5.0 : i == 2 ? 12.0 : 26.0;
-    float fall = i == 0 ? 0.26 : i == 1 ? 0.13 : i == 2 ? 0.08 : 0.045;
+    float fall = i == 0 ? 0.15 : i == 1 ? 0.08 : i == 2 ? 0.05 : 0.03;
     float size = i == 0 ? 0.11 : i == 1 ? 0.016 : i == 2 ? 0.0075 : 0.0042;
     float soft = i == 0 ? 0.9 : i == 1 ? 0.3 : 0.5;
     float lev = i == 0 ? 0.16 : i == 1 ? 0.7 : i == 2 ? 0.55 : 0.4;
@@ -576,7 +561,7 @@ vec3 snowfall(vec2 o, float glow){
   float hz = smoothstep(0.15, 0.95, 0.5 + 0.6 * fbm2s(vec2(o.x * 0.45 - uSnowWind.x * 0.8 - curtain, o.y * 0.2 + t * 0.03)));
   // the curtains themselves: soft, slanting veils of powder drifting across
   float veil = 0.5 + 0.5 * sin((o.x - uSnowWind.x * 1.2 - curtain * 1.5) * 2.2 + o.y * 0.6 * uSnowWind.y);
-  c += (vec3(0.007, 0.0075, 0.009) + LAMP_C * glow * 0.2) * hz * (0.5 + 0.8 * veil * veil);
+  c += (vec3(0.004, 0.006, 0.011) + LAMP_C * glow * 0.2) * hz * (0.6 + 0.5 * veil * veil);
   return c;
 }
 
@@ -657,7 +642,7 @@ uniform vec4 uBubbleTouch; // xyz = where the film was touched (object space), w
 // bands round the touch point; the swirl unwinds slowly.
 float bubbleThick(vec3 d){
   vec3 bt = normalize(uBubbleTouch.xyz + vec3(0.0, 0.0, 1e-4));
-  float ang = uBubbleTouch.w * exp(-(1.0 - dot(d, bt)) / 0.07);
+  float ang = uBubbleTouch.w * exp(-(1.0 - dot(d, bt)) / 0.1);
   float ca = cos(ang), sa = sin(ang);
   d = d * ca + cross(bt, d) * sa + bt * dot(bt, d) * (1.0 - ca);
   float tb = uTime * 0.05;
@@ -710,8 +695,9 @@ void main(){
   if (uBubble > 0.002){
     // the far side of the film, seen through the near one: the same flowing film, fainter
     vec3 dB = normalize(vDir);
-    vec3 fB = filmColor(bubbleThick(dB), 0.6 + 0.4 * (1.0 - r * r)) * (0.12 + 0.88 * r * r * r) * 0.55;
-    float aB = clamp(lum(fB) * 1.5, 0.01, 0.4);
+    vec3 fB = filmColor(bubbleThick(dB), 0.6 + 0.4 * (1.0 - r * r));
+    fB = mix(vec3(lum(fB)), fB, 0.7) * (0.02 + 0.98 * pow(r, 4.0)) * 0.3;   // like the front: almost clear but toward the rim
+    float aB = clamp(lum(fB) * 1.5, 0.005, 0.2);
     bc = mix(bc, fB / aB, uBubble);
     backA = mix(backA, aB, uBubble);
   }
@@ -845,7 +831,7 @@ void main(){
     float young = smoothstep(lead - 0.26, lead - 0.01, ord);
     // the ground: pink-violet at the heart, violet, then deep blue outward; rings of colour travel out
     float ring = 0.5 + 0.5 * sin(rl * 9.0 - uTime * 0.5 + 1.6 * snoise(rq * 1.4 + uTime * 0.04));
-    vec3 pink = vec3(0.95, 0.38, 0.92), violet = vec3(0.5, 0.15, 0.9), blue = vec3(0.07, 0.16, 0.8);
+    vec3 pink = vec3(0.62, 0.2, 0.78), violet = vec3(0.46, 0.14, 0.86), blue = vec3(0.07, 0.16, 0.8);   // no hot pale heart: the centre stays as deep as the rest
     vec3 ground = mix(pink, violet, smoothstep(0.0, 0.55, rl + 0.15 * sin(uTime * 0.13)));
     ground = mix(ground, blue, smoothstep(0.45, 1.05, rl + 0.15 * sin(uTime * 0.09 + 1.0)));
     ground = mix(ground, mix(ground, vec3(0.25, 0.55, 1.0), 0.45), ring * 0.45);
@@ -865,12 +851,12 @@ void main(){
     float flow = 0.8 + 0.2 * sin(ord * 30.0 - uTime * 0.9);
     float bank = smoothstep(0.08, 0.2, heat);
     vec3 melt = mix(vec3(0.35, 0.08, 0.75), vec3(0.95, 0.35, 0.95), 0.5 + 0.5 * sin(heat * 21.0 - uTime * 0.4 + snoise(rq * 8.0) * 1.2));
-    melt = mix(melt, vec3(0.75, 1.05, 1.25), smoothstep(0.56, 0.82, heat) * flow);
+    melt = mix(melt, vec3(0.42, 0.62, 1.0), smoothstep(0.56, 0.82, heat) * flow * 0.6);
     rc = mix(rc, melt, bank);
     rc += vec3(0.4, 0.5, 1.0) * rb.b * seenB * 0.25;
     float wrapR = (dot(N, L) + 0.9) / 1.9;
     rc *= 0.58 + 0.55 * wrapR;
-    emission += ground * (1.0 - seen) * 0.16 * uRoot;
+    emission += ground * (1.0 - seen) * 0.1 * smoothstep(0.0, 0.5, rl) * uRoot;   // its glow, kept off the centre
     rc += vec3(0.55, 0.3, 1.0) * pow(1.0 - NdV, 2.5) * 0.3;
     body = mix(body, rc, uRoot);
   }
@@ -886,8 +872,9 @@ void main(){
     // reflected by its two faces, coloured by interference, so it shows mostly toward the rim
     // and where it mirrors the windows; elsewhere it is clear.
     vec3 fc = filmColor(bubbleThick(normalize(vDir)), NdV);
-    float fr = 0.035 + 0.965 * pow(1.0 - NdV, 3.0);
-    vec3 bub = fc * fr * (0.35 + bubbleEnv(refl)) * 1.25;
+    fc = mix(vec3(lum(fc)), fc, 0.7);                                    // a light film, not an oil slick
+    float fr = 0.012 + 0.988 * pow(1.0 - NdV, 3.5);
+    vec3 bub = fc * fr * (0.3 + bubbleEnv(refl)) * 0.9;
     // the windows themselves: bright, barely tinted by the film
     bub += mix(vec3(1.0), fc * 1.8, 0.3) * (1.3 * pow(NdH, 900.0) + 0.35 * smoothstep(0.955, 0.975, dot(refl, normalize(vec3(-0.55, 0.6, 0.6)))));
     bubbleA = clamp(lum(bub) * 1.5 + 0.015, 0.015, 0.95);
@@ -896,7 +883,7 @@ void main(){
   }
 #endif
 
-  // ---- Liquid Gold: clear honey held up to the light ----
+  // ---- Honey: clear honey held up to the light ----
   // Transparent and glossy, not creamy: a warm light shines through it from behind, deepening
   // to amber where the path is long. A stream folds onto itself in slow coils, and small air
   // bubbles hang in it, rising very slowly (a touch lets more go).
@@ -986,10 +973,10 @@ void main(){
     float glowS;
     vec3 sc = snowStreet((lq - vec2(0.0, -0.16)) * 0.62, glowS);
     sc += snowfall(lq, glowS);
-    sc += vec3(0.05, 0.055, 0.07) * pow(1.0 - NdV, 3.0);                        // cold glass at the rim
-    sc += LAMP_C * (1.4 * pow(NdH, 500.0) + 0.06 * pow(NdH, 30.0));             // a lamp in the glass
+    sc += vec3(0.03, 0.04, 0.07) * pow(1.0 - NdV, 3.0);                        // cold glass at the rim
+    sc += LAMP_C * (0.22 * pow(NdH, 500.0) + 0.012 * pow(NdH, 30.0));           // the lamp, faintly reflected in the glass
     float cap = smoothstep(0.7, 0.9, N.y + 0.06 * snoise(vec2(atan(N.z, N.x) * 3.0, 1.0)));
-    vec3 snowCap = vec3(0.06, 0.065, 0.08) + LAMP_C * 0.06 * (0.5 + 0.5 * N.x);
+    vec3 snowCap = vec3(0.035, 0.045, 0.07) + LAMP_C * 0.04 * (0.5 + 0.5 * N.x);
     snowCap *= 0.9 + 0.1 * snoise(normalize(vDir).xz * 40.0);
     sc = mix(sc, snowCap, cap * 0.9);
     // shown as it is: the street's light is not re-lit by the time of day
@@ -1033,25 +1020,43 @@ void main(){
       vec3 tint = tc < 0.68 ? vec3(0.74, 0.84, 1.0) : tc < 0.93 ? vec3(1.0, 0.98, 0.96) : vec3(1.0, 0.72, 0.45);
       starC += tint * s;
     }
-    vec3 sc = skyC + starC;
-    sc += vec3(0.95, 0.97, 1.0) * meteor(p);
+    // the ground: snowy mountains along the bottom of the ball, dark against the sky, their
+    // snowfields faintly lit by the stars, a breath of violet glow along the ridges
+    vec2 mq = p + dN * 0.2;
+    float ridge = -0.42 + 0.16 * (1.0 - abs(snoise(vec2(mq.x * 1.6 + 3.0, 1.7)))) + 0.07 * (1.0 - abs(snoise(vec2(mq.x * 4.2, 5.1)))) + 0.015 * snoise(vec2(mq.x * 14.0, 2.0));
+    float ridge2 = -0.6 + 0.1 * (1.0 - abs(snoise(vec2(mq.x * 2.4 - 7.0, 3.3)))) + 0.03 * snoise(vec2(mq.x * 9.0, 8.0));   // nearer, lower hills
+    float aaM = fwidth(mq.y) * 1.5 + 1e-3;
+    float land = smoothstep(ridge + aaM, ridge - aaM, mq.y);
+    float land2 = smoothstep(ridge2 + aaM, ridge2 - aaM, mq.y);
+    float sky = 1.0 - land;
+    float snowF = smoothstep(0.25, 0.65, snoise(vec2(mq.x * 7.0, mq.y * 11.0)) * 0.5 + 0.5 + (mq.y - ridge) * 3.0);
+    vec3 mount = mix(vec3(0.006, 0.008, 0.016), vec3(0.03, 0.038, 0.062), snowF * smoothstep(ridge - 0.25, ridge, mq.y));
+    mount = mix(mount, vec3(0.003, 0.004, 0.008) + vec3(0.016, 0.02, 0.034) * smoothstep(ridge2 - 0.12, ridge2, mq.y), land2);
+    float halo = exp(-max(mq.y - ridge, 0.0) / 0.12) * sky;
+    vec3 sc = mix(skyC + vec3(0.02, 0.012, 0.04) * halo, mount, land) + starC * sky;
+    float met = meteor(p) * sky;
+    sc += vec3(0.95, 0.97, 1.0) * met;
     // the glass: a cool rim and a crisp window reflection
     sc += vec3(0.2, 0.24, 0.5) * pow(1.0 - NdV, 3.0) * 0.25;
     sc += env(refl) * 0.3 * fres * fres + vec3(1.0) * 0.15 * pow(NdH, 2000.0);   // glass, only at the rim and one pin of light
-    emission += (starC + vec3(0.95, 0.97, 1.0) * meteor(p)) * 0.6 * uStars;
+    emission += (starC * sky + vec3(0.95, 0.97, 1.0) * met) * 0.6 * uStars;
     body = mix(body, sc, uStars);
   }
 #endif
 
-  // ---- ferrofluid: black liquid mirror ----
+  // ---- ferrofluid: deep black and glossy, like liquid latex ----
+  // Only soft, broad light sources are reflected, so the highlights glide smoothly over the
+  // spikes instead of flickering between facets; no thin-film sheen, no sparkle.
 #ifdef G_FERRO
   if (uFerroLook > 0.002){
-    vec3 E = env(refl);
-    // an oily, faint interference sheen in the reflections (like the photographs)
-    float fd = 360.0 + 140.0 * snoise(vDir.xy * 3.0 + vDir.z + uTime * 0.02);
-    vec3 sheen = mix(vec3(1.0), thinFilm(NdV, fd) * 1.6, 0.45);
-    vec3 fc = vec3(0.002, 0.002, 0.003) + vec3(0.92, 0.95, 1.06) * lum(E) * sheen * (0.12 + 0.88 * fres) * 0.8;
-    fc += mix(vec3(1.0), uLightColor, 0.3) * (2.4 * pow(NdH, 220.0) + 0.06 * pow(NdH, 30.0));
+    vec3 Ra = refl;
+    float k1 = max(dot(Ra, normalize(vec3(-0.5, 0.75, 0.45))), 0.0);
+    float k2 = max(dot(Ra, normalize(vec3(0.75, 0.35, 0.3))), 0.0);
+    float room = 0.015 + 0.03 * smoothstep(-0.3, 1.0, Ra.y);
+    vec3 E = vec3(room) + vec3(1.0, 0.98, 0.96) * 0.55 * pow(k1, 10.0) + mix(vec3(0.9), uLightColor, 0.4) * 0.25 * pow(k2, 8.0);
+    float fr = 0.06 + 0.94 * pow(1.0 - NdV, 4.0);
+    vec3 fc = vec3(0.004, 0.004, 0.005) + E * fr * 1.3;
+    fc += mix(vec3(1.0), uLightColor, 0.3) * (0.6 * pow(NdH, 70.0) + 0.06 * pow(NdH, 12.0));
     body = mix(body, fc, uFerroLook);
   }
 #endif
@@ -1170,10 +1175,10 @@ void main(){
       // borrow a dense patch of the frost (the outer ring of the pattern), turned at random
       vec2 ruv2 = mat2(cos(an), -sin(an), sin(an), cos(an)) * rel * 1.1 + 0.66 * vec2(cos(tt.w * 3.1), sin(tt.w * 3.1));
       vec4 lt = texture2D(uFrostTex, ruv2 * 0.47 + 0.5);
-      float R = 0.42 * (1.0 - exp(-age / 3.5));
+      float R = 0.5 * (1.0 - exp(-age / 1.1));
       float dEff = length(rel) + 0.22 * lt.r / max(lt.g, 0.02) + 0.05 * snoise(rel * 9.0 + tt.w);
       float life = 1.0 - smoothstep(35.0, 50.0, age);
-      float ls = smoothstep(R + 0.015, R - 0.015, dEff) * smoothstep(0.2, 0.6, lt.g) * life;
+      float ls = smoothstep(R + 0.04, R - 0.04, dEff) * smoothstep(0.2, 0.6, lt.g) * life;
       if (ls > seen){ bright = max(bright, lt.b / max(lt.g, 0.02)); }
       seen = max(seen, ls);
       seenB = max(seenB, ls * 0.6);
@@ -1260,12 +1265,12 @@ void main(){
     float tEnd = max(-2.0 * dot(ro, rdl), 0.0);
     float t = 0.0, dmin = 9.0, hit = 0.0;
     vec3 q = ro;
-    for (int i = 0; i < 36; i++){
+    for (int i = 0; i < 56; i++){
       q = ro + rdl * t;
       float dd = lavaSdf(q);
       dmin = min(dmin, dd);
-      if (dd < 0.002){ hit = 1.0; break; }
-      t += max(dd * 0.9, 0.008);
+      if (dd < 0.0015){ hit = 1.0; break; }
+      t += max(dd * 0.85, 0.004);
       if (t > tEnd) break;
     }
     vec3 hot = vec3(1.0, 0.34, 0.06), deep = vec3(0.6, 0.1, 0.02), pale = vec3(1.0, 0.6, 0.36), gold = vec3(1.0, 0.62, 0.18);
@@ -1286,7 +1291,13 @@ void main(){
       wax *= 1.15 - 0.45 * height;                                    // further from the lamp, dimmer
       // the pool burns hottest: red-orange, gold where the lamp is right under it
       float pool = smoothstep(-0.55, -0.74, q.y);
-      wax = mix(wax, mix(vec3(0.95, 0.2, 0.03), gold, 0.5 + 0.5 * thin), pool * 0.85);
+      wax = mix(wax, mix(vec3(0.75, 0.12, 0.015), gold * 0.85, 0.1 + 0.35 * thin), pool * 0.9);
+      // depth: wax further back sits behind more liquid (a touch dimmer and hazier); where blobs
+      // nearly touch, or meet the pool, the crease falls into soft shadow
+      float ao = clamp(0.35 + 0.65 * lavaSdf(q + nb * 0.09) / 0.09, 0.0, 1.0);
+      wax *= 0.55 + 0.45 * ao;
+      float far = smoothstep(0.2, 1.4, t);
+      wax = mix(wax, wax * 0.62 + hot * 0.05, far);
       // the waxy skin: soft, a broad dull sheen, tiny pores
       vec3 Lo = normalize(L * uGroupRot);
       wax += pale * 0.08 * pow(clamp(dot(reflect(rdl, nb), Lo), 0.0, 1.0), 6.0);
@@ -1419,7 +1430,7 @@ void main(){
   // Turrell's field is matte and even, like fog: no sharp speculars in his mode
   // frost diffuses reflections (frosted, it glows rather than mirrors)
   float gloss = (1.0 - 0.85 * uAperFlat) * (1.0 - uMatte);
-  gloss *= (1.0 - uSnow) * (1.0 - uStars) * (1.0 - uHoney) * (1.0 - uWrap) * (1.0 - uInk) * (1.0 - uSky) * (1.0 - uLava) * (1.0 - 0.9 * uFerroLook) * (1.0 - uBubble); // these draw their own reflections
+  gloss *= (1.0 - uSnow) * (1.0 - uStars) * (1.0 - uHoney) * (1.0 - uWrap) * (1.0 - uInk) * (1.0 - uSky) * (1.0 - uLava) * (1.0 - uFerroLook) * (1.0 - uBubble); // these draw their own reflections
   body += gloss * (env(refl) * (0.03 + 0.75 * fres) * (0.35 + 0.65 * max(uRefract, uClarity)) * (1.0 - 0.75 * uResin)
          + uLightColor * (0.2 * pow(NdH, 70.0) * uOrigin + 1.6 * pow(NdH, 300.0) * (1.0 - uOrigin)) * (1.0 - 0.75 * uSoft));
   // Pashgian: very high polish, a tight bright highlight and a crisp reflection at the rim
@@ -1464,7 +1475,7 @@ void main(){
   alpha = mix(alpha, lavaA, clamp(uLava, 0.0, 1.0));
   // the artist over a full scene (the snowstorm's ball already shows the graded street)
   col = artistGrade(col, p, uSceneArt.z);
-  // Liquid Gold: a sticky thread pulled out of it lies over the ball too (drawn by the backdrop outside it)
+  // Honey: a sticky thread pulled out of it lies over the ball too (drawn by the backdrop outside it)
   if (uThreadB.z > 0.002){
     vec4 hth = honeyThread(p);
     col = mix(col, hth.rgb, hth.a);

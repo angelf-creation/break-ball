@@ -730,16 +730,20 @@ void main(){
     col *= 1.0 - 0.6 * edgeP * smoothstep(0.1, 0.9, -em);
   }
 
-  // ---- where you touched: new sheets spread from that point into the ice
+  // ---- where you touched: big new sheets crack out from that point through the ice, then over
+  // the next twenty seconds or so the ice heals and they smooth away again
   for (int i = 0; i < 4; i++){
     vec4 tc = uTouchCrack[i];
     if (tc.w < 0.0) continue;
-    float reach = 0.85 * (1.0 - exp(-max(uClock - tc.w, 0.0) * 0.55));
-    for (int k = 0; k < 2; k++){
-      vec3 n = normalize(cross(tc.xyz, hashDir(float(i * 2 + k) + tc.w)) + 0.15 * tc.xyz);
-      vec4 sh = sheet(P, rd, 0.0, len, n, dot(n, tc.xyz), float(i) * 3.3 + tc.w, reach, tc.xyz);
+    float age = max(uClock - tc.w, 0.0);
+    float reach = 1.35 * (1.0 - exp(-age * 1.1));
+    float heal = 1.0 - smoothstep(8.0, 22.0, age);
+    if (heal <= 0.0) continue;
+    for (int k = 0; k < 3; k++){
+      vec3 n = normalize(cross(tc.xyz, hashDir(float(i * 3 + k) + tc.w)) + 0.15 * tc.xyz);
+      vec4 sh = sheet(P, rd, 0.0, len, n, dot(n, tc.xyz), float(i) * 3.3 + float(k) * 1.7 + tc.w, reach, tc.xyz);
       vec2 ts = streaks(P + rd * 0.1, n, sh.a, tc.w + float(k));
-      col = mix(col, mix(vec3(0.01, 0.14, 0.23), vec3(0.62, 0.84, 0.92), smoothstep(0.4, 0.7, ts.x)), sh.a * 0.6);
+      col = mix(col, mix(vec3(0.01, 0.14, 0.23), vec3(0.7, 0.9, 0.97), smoothstep(0.4, 0.7, ts.x)), sh.a * 0.85 * heal);
     }
   }
 

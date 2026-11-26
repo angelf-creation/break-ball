@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { store, useStore } from '../state/store';
-import { breathAt, sessionElapsed, PHASE_TEXT, BREATH_BY_ID } from '../time/breath';
+import { breathAt, sessionElapsed, phaseWord, BREATH_BY_ID } from '../time/breath';
 import { SESSION_BY_ID } from '../data/sessions';
 import { startSession, useNow } from './hooks';
 
@@ -28,7 +28,7 @@ export function BreathIndicator() {
       const b = breathAt(sessionElapsed(s.session.startedAt), s.breathPreset);
       const el = wordRef.current;
       if (el) {
-        const word = PHASE_TEXT[b.phase];
+        const word = phaseWord(b.phase, s.breathPreset);
         // fade out, swap the word, fade back in; the rest phase stays empty
         if (word !== shown) {
           shown = word;

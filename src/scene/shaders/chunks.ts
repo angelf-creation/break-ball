@@ -89,7 +89,7 @@ uniform vec4 uDent;        // pillow: xyz = where it is pressed, w = how deep
 uniform float uFerro;      // ferrofluid: how far the spikes are raised (weight * field)
 uniform vec4 uFerroField;  // xyz = where the magnet is (object space), w = how focused it is
 uniform sampler2D uFerroTex; // equirect: R = distance to the nearest spike / spacing, G = its size, B = distance to the ridge line, A = its phase
-uniform vec4 uPull;       // Liquid Gold: xyz = where a thread is pulled from (object space), w = how hard
+uniform vec4 uPull;       // Honey: xyz = where a thread is pulled from (object space), w = how hard
 ${WRAP}
 uniform float uWobble;     // soap bubble: the slow breathing jiggle of a floating film
 uniform vec3 uFerroMotion;  // x = 0 broad merged humps .. 1 sharp spikes, y = the spikes' own sway clock, z = how much they sway
@@ -200,7 +200,7 @@ float orbDisp(vec3 dir){
     vec4 b = wrapBubble(dir, rr);
     h += uWrap * 0.03 * clamp(b.w, 0.0, 1.2) * sqrt(max(1.0 - rr * rr, 0.0));
   }
-  // Liquid Gold: the surface is drawn up toward a thread being pulled out of it
+  // Honey: the surface is drawn up toward a thread being pulled out of it
   if (uPull.w > 0.002){
     float an = acos(clamp(dot(dir, uPull.xyz), -1.0, 1.0));
     h += uPull.w * 0.07 * exp(-an * an / 0.035);
@@ -300,11 +300,13 @@ uniform vec2 uSnowWind;   // Snowstorm: x = how far the wind has carried the sno
 uniform vec4 uSwirl;      // Snowstorm: xy = where the finger stirred the air (orb radii), z = strength
 uniform vec4 uMeteor;     // falling star: xy = start (orb radii, screen-aligned), z = heading, w = progress 0..1
 uniform vec4 uMeteorB;    // x = path length, y = brightness, z = on
+uniform vec4 uBreathGlow;  // session: rgb = the breath's colour (warm in, cool out), w = how much
+uniform float uBreathSpin; // session: where the glow is in its slow circle round the orb
 uniform vec4 uSceneArt;   // artist over the scene materials: y = Turrell's light wash, z = how much
-uniform vec4 uThreadA;    // Liquid Gold thread: xy = where it leaves the honey, zw = its free end (orb radii, screen-aligned)
+uniform vec4 uThreadA;    // Honey thread: xy = where it leaves the honey, zw = its free end (orb radii, screen-aligned)
 uniform vec4 uThreadB;    // x = thickness, y = how far it sags, z = how much there is of it
 
-// Liquid Gold: a sticky thread pulled out of the honey, in orb radii around the orb's centre:
+// Honey: a sticky thread pulled out of the honey, in orb radii around the orb's centre:
 // a sagging curve from the honey to the finger, thinning in the middle as it stretches.
 vec4 honeyThread(vec2 o){
   if (uThreadB.z < 0.002) return vec4(0.0);
@@ -397,6 +399,14 @@ vec3 fieldColor(vec2 uv){
   float a1 = length(ad - uAura.xy);
   c += mix(uBleed, vec3(1.0, 0.95, 0.86), 0.25 + 0.2 * uAura.w) * uAura.z * exp(-a1 * a1 * 0.55);
   c += mix(uBleed, vec3(1.0, 0.96, 0.9), 0.4) * uAura.w * 0.16 * exp(-max(d - 0.85, 0.0) * 1.15);
+  // a meditation session: a soft, blurry light circling slowly round the orb, warm while
+  // breathing in, cool while breathing out
+  if (uBreathGlow.w > 0.001){
+    float ga = atan(ad.y, ad.x);
+    float ring = exp(-sq((length(ad) - 1.3) / 0.6));
+    float lobes = 0.5 + 0.35 * cos(ga - uBreathSpin) + 0.2 * cos(2.0 * ga + uBreathSpin * 0.6 + 1.0);
+    c += uBreathGlow.rgb * ring * max(lobes, 0.0) * uBreathGlow.w;
+  }
   // gentle vignette keeps dark areas at the frame edges
   vec2 e = uv - 0.5;
   c *= 1.0 - 0.55 * smoothstep(0.25, 0.75, length(e * vec2(1.0, 1.15)));
