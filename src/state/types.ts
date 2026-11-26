@@ -1,9 +1,9 @@
 export type MaterialId =
-  | 'default' | 'glass' | 'jelly' | 'dust' | 'aura' | 'water' | 'powder'
+  | 'default' | 'glass' | 'jelly' | 'dust' | 'water' | 'powder'
   | 'ice'
   | 'flower' | 'mushroom' | 'root' | 'medusa' | 'pillow'
-  | 'bubble' | 'milk' | 'ferro' | 'sky' | 'frost' | 'honey' | 'turrell'
-  | 'snow' | 'starfall';
+  | 'bubble' | 'ferro' | 'sky' | 'frost' | 'honey'
+  | 'snow' | 'starfall' | 'wrap' | 'ink' | 'lava';
 export type PatternId = 'opcell' | 'moire' | 'cymatic' | 'ganzfeld';
 export type ArtistId = 'default' | 'turrell' | 'janssens' | 'cruzdiez' | 'eliasson' | 'pashgian' | 'corse';
 export type SessionId = 'free' | 'm5' | 'm15' | 'm42' | 'm60' | 'open';
@@ -17,9 +17,9 @@ export type AppMode = 'session' | 'play';
 export type VideoKind = 'desktop' | 'phone';
 
 export const MATERIAL_ORDER: MaterialId[] = [
-  'default', 'turrell', 'glass', 'bubble', 'honey', 'jelly', 'dust', 'aura', 'sky', 'water', 'milk', 'ferro', 'powder',
+  'default', 'glass', 'bubble', 'honey', 'ink', 'lava', 'jelly', 'dust', 'sky', 'water', 'ferro', 'powder',
   'ice', 'frost', 'snow', 'starfall',
-  'flower', 'mushroom', 'root', 'medusa', 'pillow',
+  'flower', 'mushroom', 'root', 'medusa', 'pillow', 'wrap',
 ];
 export const PATTERN_ORDER: PatternId[] = ['opcell', 'moire', 'cymatic', 'ganzfeld'];
 

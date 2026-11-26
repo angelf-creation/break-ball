@@ -229,7 +229,7 @@ export function makeFrostTexture(size = 1536): THREE.CanvasTexture {
  * spike centre in units of 0.62 x spacing, G = that spike's size (0.75..1.25).
  */
 export function makeFerroTexture(n = 150, w = 768, h = 384): THREE.DataTexture {
-  const px = new Float32Array(n), py = new Float32Array(n), pz = new Float32Array(n), sz = new Float32Array(n);
+  const px = new Float32Array(n), py = new Float32Array(n), pz = new Float32Array(n), sz = new Float32Array(n), phase = new Float32Array(n);
   const ga = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < n; i++) {
     const y = 1 - (2 * (i + 0.5)) / n, r = Math.sqrt(1 - y * y), a = i * ga;
@@ -237,6 +237,7 @@ export function makeFerroTexture(n = 150, w = 768, h = 384): THREE.DataTexture {
     py[i] = y;
     pz[i] = Math.sin(a) * r;
     sz[i] = Math.random();
+    phase[i] = Math.random();
   }
   const spacing = Math.sqrt((4 * Math.PI) / n);
   const reach = spacing * 0.62;
@@ -250,19 +251,24 @@ export function makeFerroTexture(n = 150, w = 768, h = 384): THREE.DataTexture {
     for (let i = 0; i < w; i++) {
       const ph = ((i + 0.5) / w - 0.5) * Math.PI * 2;
       const x = Math.cos(ph) * r, z = Math.sin(ph) * r;
-      let best = -2, bi = 0;
+      let best = -2, second = -2, bi = 0;
       for (let k = lo; k <= hi; k++) {
         const d = x * px[k] + y * py[k] + z * pz[k];
         if (d > best) {
+          second = best;
           best = d;
           bi = k;
-        }
+        } else if (d > second) second = d;
       }
       const ang = Math.acos(Math.min(1, best));
+      const ang2 = Math.acos(Math.min(1, Math.max(-1, second)));
       const o = (j * w + i) * 4;
       data[o] = Math.round(Math.min(1, ang / reach) * 255);
       data[o + 1] = Math.round(sz[bi] * 255);
-      data[o + 3] = 255;
+      // how far from the line where this spike's base meets its neighbour's (0 on it): ridges
+      data[o + 2] = Math.round(Math.min(1, (ang2 - ang) / reach) * 255);
+      // each spike's own phase, so neighbours rise and sink out of step
+      data[o + 3] = Math.round(phase[bi] * 255);
     }
   }
   const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
@@ -272,4 +278,59 @@ export function makeFerroTexture(n = 150, w = 768, h = 384): THREE.DataTexture {
   tex.minFilter = THREE.LinearFilter;
   tex.needsUpdate = true;
   return tex;
+}
+
+/**
+ * Bubble Wrap: bubble centres on a Fibonacci lattice over the sphere (offset, honeycomb-like
+ * rows, no seam and no pinching at the poles), plus an equirect map telling each point of the
+ * sphere which bubble is nearest (R = index low byte, G = high byte). The shader measures the
+ * exact distance to that centre itself, so the map can use nearest filtering.
+ */
+export function makeWrapLattice(n = 460, w = 1024, h = 512) {
+  const centres = new Float32Array(n * 3);
+  const ga = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (2 * (i + 0.5)) / n, r = Math.sqrt(1 - y * y), a = i * ga;
+    centres[i * 3] = Math.cos(a) * r;
+    centres[i * 3 + 1] = y;
+    centres[i * 3 + 2] = Math.sin(a) * r;
+  }
+  const spacing = Math.sqrt((4 * Math.PI) / n);
+  const data = new Uint8Array(w * h * 4);
+  for (let j = 0; j < h; j++) {
+    const th = ((j + 0.5) / h) * Math.PI;
+    const y = Math.cos(th), r = Math.sin(th);
+    const lo = Math.max(0, Math.floor(((1 - (y + spacing * 1.6)) * n) / 2 - 1));
+    const hi = Math.min(n - 1, Math.ceil(((1 - (y - spacing * 1.6)) * n) / 2 + 1));
+    for (let i = 0; i < w; i++) {
+      const ph = ((i + 0.5) / w - 0.5) * Math.PI * 2;
+      const x = Math.cos(ph) * r, z = Math.sin(ph) * r;
+      let best = -2, bi = 0;
+      for (let k = lo; k <= hi; k++) {
+        const d = x * centres[k * 3] + y * centres[k * 3 + 1] + z * centres[k * 3 + 2];
+        if (d > best) {
+          best = d;
+          bi = k;
+        }
+      }
+      const o = (j * w + i) * 4;
+      data[o] = bi & 255;
+      data[o + 1] = bi >> 8;
+      data[o + 3] = 255;
+    }
+  }
+  const map = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.ClampToEdgeWrapping;
+  map.magFilter = map.minFilter = THREE.NearestFilter;
+  map.needsUpdate = true;
+  // per bubble: xyz = its centre, w = how inflated it is (updated by the scene as bubbles pop and refill)
+  const state = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    state.set([centres[i * 3], centres[i * 3 + 1], centres[i * 3 + 2], 1], i * 4);
+  }
+  const tex = new THREE.DataTexture(state, n, 1, THREE.RGBAFormat, THREE.FloatType);
+  tex.magFilter = tex.minFilter = THREE.NearestFilter;
+  tex.needsUpdate = true;
+  return { map, tex, state, centres, n, radius: spacing * 0.48 };
 }

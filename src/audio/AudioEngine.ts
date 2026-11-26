@@ -4,7 +4,7 @@ import { breathAt, sessionElapsed } from '../time/breath';
 import { soundLevel } from './level';
 import { makeNoiseBuffers, type NoiseBuffers } from './noise';
 import { MATERIAL_BY_ID } from '../data/materials';
-import type { BedLayer, VoiceSpec } from './spec';
+import type { BedLayer, CueId, DriveId, VoiceSpec } from './spec';
 import type { MixLevels } from '../state/types';
 
 /**
@@ -149,6 +149,25 @@ export class AudioEngine {
     this.currentMaterial = id;
     const t = this.ctx.currentTime;
     this.layers.forEach((g, k) => g.gain.setTargetAtTime(k === id ? 1 : 0, t, 0.7));
+  }
+
+  /** A named one-shot the scene asks for (e.g. honey: a thread letting go). Silent if the material has none. */
+  cue(material: MaterialId, name: CueId, intensity: number, pan: number) {
+    const v = MATERIAL_BY_ID[material].sound.cues?.[name];
+    if (!this.ctx || !this.enabled || !v) return;
+    const amp = (0.6 + 0.6 * intensity) * (1 - 0.4 * this.calm);
+    this.voice(v, this.ctx.currentTime + 0.005, amp, pan, this.orbBus, true);
+  }
+
+  /** when each sounding bubble-wrap snap ends (to cap how many overlap) */
+  private snaps: number[] = [];
+  /** bed layers that follow a live value from the scene */
+  private drives = new Map<DriveId, GainNode[]>();
+  /** A live value from the scene (0..1), eased: bed layers marked follow ride it. */
+  drive(name: DriveId, value: number) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    for (const g of this.drives.get(name) ?? []) g.gain.setTargetAtTime(0.25 + 1.25 * value, t, 0.8);
   }
 
   /** Tactile feedback for click / drag on the orb. */
@@ -367,6 +386,14 @@ export class AudioEngine {
     if (L.lfo) this.lfo(L.lfo.target === 'freq' ? f.frequency : g.gain, L.lfo.rate, L.lfo.depth);
     if (L.kind === 'noise') {
       this.loop(this.nb[L.color]).connect(f);
+      if (L.follow) {
+        const d = this.gain(0.5);
+        const list = this.drives.get(L.follow) ?? [];
+        list.push(d);
+        this.drives.set(L.follow, list);
+        f.connect(g).connect(d).connect(out);
+        return;
+      }
     } else {
       L.freqs.forEach((hz, i) => {
         const o = this.osc(L.wave, hz);
@@ -655,7 +682,7 @@ export class AudioEngine {
         // fracture: a few tiny bright clicks, then a soft low settling
         const n = Math.max(1, Math.round(tw(v.ticks) * (1 - 0.5 * this.calm)));
         for (let i = 0; i < n; i++) {
-          const ti = t + (touch ? Math.random() * v.spread : 0) + i * rnd(0.008, 0.03);
+          const ti = t + (touch ? Math.random() * v.spread : 0) + i * rnd(v.gap?.[0] ?? 0.008, v.gap?.[1] ?? 0.03);
           const dur = rnd(0.002, 0.006);
           this.burst(this.nb.white, ti, dur)
             .connect(this.filter('bandpass', rnd(v.band[0], v.band[1]), v.q ?? 3))
@@ -666,6 +693,85 @@ export class AudioEngine {
           this.burst(this.nb.brown, ts, 0.4)
             .connect(this.filter('lowpass', 300))
             .connect(this.env(ts, 0.06, 0.35, v.settle * amp, out));
+        }
+        break;
+      }
+      case 'snap': {
+        // at most about 8 at once, so a fast swipe stays pleasant (they also pass the compressor)
+        const now = ctx.currentTime;
+        this.snaps = this.snaps.filter((x) => x > now);
+        if (this.snaps.length >= 8) break;
+        this.snaps.push(t + 0.12);
+        const a = v.amp * amp * rnd(0.75, 1.1);
+        // the click: a 2 ms burst, the very top rolled off so fast popping never gets piercing
+        this.burst(this.nb.white, t, 0.003)
+          .connect(this.filter('highpass', 900))
+          .connect(this.filter('lowpass', 3800))
+          .connect(this.env(t, 0.0008, 0.012, a * 0.9, out));
+        // the hollow "puk"
+        const f = rnd(v.body[0], v.body[1]);
+        const o = ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(f * 1.5, t);
+        o.frequency.exponentialRampToValueAtTime(f, t + 0.02);
+        o.connect(this.env(t, 0.001, 0.05, a * 0.8, out));
+        o.start(t);
+        o.stop(t + 0.1);
+        const nb = this.burst(this.nb.pink, t, 0.04);
+        nb.connect(this.filter('bandpass', f * 1.2, 3)).connect(this.env(t, 0.001, 0.035, a * 0.5, out));
+        // a tiny crinkle of plastic right after
+        for (let i = 0; i < 3; i++) {
+          const ti = t + 0.02 + i * rnd(0.01, 0.025);
+          this.burst(this.nb.white, ti, 0.004)
+            .connect(this.filter('bandpass', rnd(1500, 3200), 2))
+            .connect(this.env(ti, 0.001, 0.006, a * 0.12, out));
+        }
+        break;
+      }
+      case 'chirp': {
+        // a distant bird: a short phrase of whistles, each sweeping down then up, softened by distance
+        const n = Math.max(2, Math.round(tw(v.count)));
+        const f0 = rnd(v.range[0], v.range[1]);
+        const lp = this.filter('lowpass', 3800);
+        lp.connect(out);
+        for (let i = 0; i < n; i++) {
+          const ti = t + i * rnd(0.09, 0.16);
+          const f = f0 * rnd(0.9, 1.1) * (i % 2 ? 1.12 : 1);
+          const d = rnd(0.05, 0.09);
+          const o = ctx.createOscillator();
+          o.type = 'sine';
+          o.frequency.setValueAtTime(f * 1.15, ti);
+          o.frequency.exponentialRampToValueAtTime(f * 0.85, ti + d * 0.5);
+          o.frequency.exponentialRampToValueAtTime(f * 1.05, ti + d);
+          o.connect(this.env(ti, 0.008, d, v.amp * amp * rnd(0.6, 1), lp));
+          o.start(ti);
+          o.stop(ti + d + 0.1);
+        }
+        break;
+      }
+      case 'gloop': {
+        // one or a few thick bubbles: each a low sine that swells and rises as it opens, and a
+        // squelch of brown noise through a narrow band that sweeps up with it
+        const n = Math.max(1, Math.round(tw(v.count)));
+        let ti = t;
+        for (let i = 0; i < n; i++) {
+          const f0 = rnd(v.range[0], v.range[1]);
+          const d = tw(v.dur) * rnd(0.8, 1.2);
+          const a = v.amp * amp * rnd(0.65, 1) * (i ? 0.7 : 1);
+          const o = ctx.createOscillator();
+          o.type = 'sine';
+          o.frequency.setValueAtTime(f0, ti);
+          o.frequency.exponentialRampToValueAtTime(f0 * v.rise, ti + d * 0.7);
+          o.connect(this.filter('lowpass', 600)).connect(this.env(ti, d * 0.35, d * 0.65, a, out));
+          o.start(ti);
+          o.stop(ti + d + 0.3);
+          if (v.squelch > 0) {
+            const bf = this.filter('bandpass', f0 * 0.9, 5);
+            bf.frequency.setValueAtTime(f0 * 0.9, ti);
+            bf.frequency.exponentialRampToValueAtTime(Math.min(600, f0 * v.rise * 1.4), ti + d * 0.8);
+            this.burst(this.nb.brown, ti, d + 0.1).connect(bf).connect(this.env(ti, d * 0.25, d * 0.75, a * v.squelch, out));
+          }
+          ti += rnd(0.14, 0.4);
         }
         break;
       }

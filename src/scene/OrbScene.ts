@@ -7,12 +7,14 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { store } from '../state/store';
 import { MATERIAL_ORDER, PATTERN_ORDER, type VideoKind } from '../state/types';
 import { ARTIST_BY_ID, type ArtistForm } from '../data/artists';
+import type { CueId, DriveId } from '../audio/spec';
 import { MATERIAL_BY_ID, GEN_KEYS, NONE, type GeneratorMix } from '../data/materials';
 import { effectiveDate, lightMood } from '../time/ceTime';
 import { breathAt, sessionElapsed } from '../time/breath';
 import { soundLevel } from '../audio/level';
 import { VideoSource, VIDEO_DISC } from './videoSource';
-import { makeFerroTexture, makeFrostTexture, makeRootTexture } from './growth';
+import { InkSim } from './inkSim';
+import { makeFerroTexture, makeFrostTexture, makeRootTexture, makeWrapLattice } from './growth';
 import { buildCreature, CREATURE_KEYS, type Creature, type CreatureKey } from './creatures';
 import { orbVertex, orbFragment } from './shaders/orb';
 import {
@@ -37,6 +39,10 @@ export interface SceneOptions {
   onTouch?: (intensity: number, pan: number) => void;
   /** a falling star appeared (Starfall): its brightness 0..1 and stereo pan */
   onStar?: (intensity: number, pan: number) => void;
+  /** a named one-shot for the material's sound (honey: a thread letting go, a bubble surfacing) */
+  onCue?: (name: CueId, intensity: number, pan: number) => void;
+  /** a live value for the sound (Snowstorm: how hard the wind blows now, 0..1), sent a few times a second */
+  onDrive?: (name: DriveId, value: number) => void;
 }
 
 function particleGeometry(n: number): THREE.BufferGeometry {
@@ -149,7 +155,6 @@ export class OrbScene {
     uInvModel: { value: new THREE.Matrix4() },
     uCreature: { value: 0 },
     uPrint: { value: 0 },
-    uAuraMat: { value: 0 },
     uSonic: { value: new THREE.Vector3() },
     uSonicT: { value: 0 },
     uSonicAmt: { value: 1 },
@@ -162,20 +167,37 @@ export class OrbScene {
     uTouchCrack: { value: Array.from({ length: 4 }, () => new THREE.Vector4(0, 0, 1, -1)) },
     uRoot: { value: 0 },
     uBubble: { value: 0 },
+    uBubbleTouch: { value: new THREE.Vector4(0, 0, 1, 0) },
+    uWobble: { value: 0 },
+    uHoneyBub: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, -1)) },
+    uHoneyT: { value: 0 },
+    uSceneArt: { value: new THREE.Vector4() },
+    uWrap: { value: 0 },
+    uInk: { value: 0 },
+    uLava: { value: 0 },
+    uBlobs: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, 0, 0)) },
+    uBlobS: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 1, 0, 1)) },
+    uCamObj: { value: new THREE.Vector3(0, 0, 4) },
+    uInkTex: { value: null as THREE.Texture | null },
+    uWrapMap: { value: null as THREE.Texture | null },
+    uWrapTex: { value: null as THREE.Texture | null },
+    uWrapN: { value: new THREE.Vector2(1, 0.1) },
+    uSun: { value: new THREE.Vector4(0, 0.6, 0.5, 0.4) },
+    uThreadA: { value: new THREE.Vector4() },
+    uThreadB: { value: new THREE.Vector4() },
+    uPull: { value: new THREE.Vector4(0, 0, 1, 0) },
     uSnow: { value: 0 },
     uSnowWind: { value: new THREE.Vector2() },
     uSwirl: { value: new THREE.Vector4() },
     uStars: { value: 0 },
     uSkyRot: { value: new THREE.Matrix3() },
-    uNight: { value: new THREE.Vector2() },
     uMeteor: { value: new THREE.Vector4() },
     uMeteorB: { value: new THREE.Vector4() },
     uHoney: { value: 0 },
-    uField: { value: 0 },
-    uMilk: { value: 0 },
     uFerro: { value: 0 },
     uFerroLook: { value: 0 },
     uFerroField: { value: new THREE.Vector4(0, 0, 1, 0) },
+    uFerroMotion: { value: new THREE.Vector3(0.88, 0, 0.18) },
     uFerroTex: { value: null as THREE.Texture | null },
     uSky: { value: 0 },
     uFrost: { value: 0 },
@@ -253,9 +275,10 @@ export class OrbScene {
     const on = (v: number) => v > 0.0005;
     const flags: Record<string, boolean> = {
       G_REFRACT: on(g.refract), G_ABSORB: on(g.absorb), G_SOFT: on(g.soft), G_CAUSTIC: on(g.caustic),
-      G_AURA: on(g.aura), G_ROOT: on(g.root), G_SSS: on(g.sss),
-      G_BUBBLE: on(g.bubble), G_SNOW: on(g.snow), G_STARS: on(g.stars), G_HONEY: on(g.honey), G_FIELD: on(g.lightfield), G_MILK: on(g.milk), G_FERRO: on(g.ferro), G_SKY: on(g.sky), G_FROST: on(g.frost),
+      G_ROOT: on(g.root), G_SSS: on(g.sss),
+      G_BUBBLE: on(g.bubble), G_SNOW: on(g.snow), G_STARS: on(g.stars), G_HONEY: on(g.honey), G_FERRO: on(g.ferro), G_SKY: on(g.sky), G_FROST: on(g.frost),
       G_APERFLAT: on(f.aperFlat), G_HAZE: on(f.haze), G_PRISM: on(f.prism), G_RETRO: on(f.retro),
+      G_WRAP: on(g.wrap), G_INK: on(g.ink), G_LAVA: on(g.lava),
       G_STRIPES: on(f.stripes), G_DISC: on(f.disc) || on(f.mono), G_RESIN: on(f.resin),
     };
     const key = Object.keys(flags).filter((k) => flags[k]).join(',');
@@ -298,13 +321,174 @@ export class OrbScene {
   /** ferrofluid: the magnet (a held touch) and how strongly the field lifts the liquid */
   private ferroAmp = 0;
   private ferroFocus = 0;
+  /** Liquid Gold: a thread being pulled out (1) or falling back after letting go (2), in orb radii */
+  private thread = { state: 0, ax: 0, ay: 0, ex: 0, ey: 0, tx: 0, ty: 0, life: 0, sag: 0, w: 0, creakAt: -9, dir: new THREE.Vector3(0, 0, 1) };
+  /** Liquid Gold bubbles: their clock, the next slot, the next one from the bottom, which have already surfaced */
+  private honeyT = 0;
+  private honeyBubIdx = 0;
+  private honeyBubNext = 6;
+  private honeyBlup = Array.from({ length: 8 }, () => false);
+  /** where a pointer is, in orb radii from the orb's centre (screen-aligned, y up) */
+  private fingerOrb(clientX: number, clientY: number) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const r = Math.max(1, this.orbCss.r);
+    return { x: (clientX - rect.left - this.orbCss.x) / r, y: -(clientY - rect.top - this.orbCss.y) / r };
+  }
+  private spawnHoneyBubble(x: number, y: number, rad: number) {
+    this.U.uHoneyBub.value[this.honeyBubIdx].set(x, y, rad, this.honeyT);
+    this.honeyBlup[this.honeyBubIdx] = false;
+    this.honeyBubIdx = (this.honeyBubIdx + 1) % this.honeyBlup.length;
+  }
+  /** a honey bubble's centre now (mirrors the shader in orb.ts) */
+  private honeyBubPos(v: THREE.Vector4) {
+    const age = this.honeyT - v.w;
+    if (this.gen.lava > this.gen.honey) return { x: v.x + 0.02 * Math.sin(age * 1.7 + v.w * 7), y: v.y + (0.03 + 8 * v.z * v.z) * age };
+    return { x: v.x + 0.015 * Math.sin(age * 0.5 + v.w * 7), y: v.y + (0.012 + 6 * v.z * v.z) * age };
+  }
+  /** Lava Lamp: the blobs (position, velocity, temperature, size), where the finger warmed the liquid */
+  private blobs = [0.3, 0.2, 0.16, 0.12].map((r, i) => ({
+    p: new THREE.Vector3(Math.sin(i * 2.4) * 0.3, -0.5 + 0.25 * i, Math.cos(i * 2.4) * 0.2),
+    v: new THREE.Vector3(),
+    temp: i % 2 ? 0.7 : 0.3,
+    r,
+  }));
+  private heat = new THREE.Vector4(0, 0, 0, 0);
+  private blobTouching = new Set<string>();
+  private blobSoundAt = -9;
+  /** Ink: the simulation (built on first use), when the next drop falls by itself, the last tap drop, the finger's last point */
+  private ink: InkSim | null = null;
+  private inkNext = 0;
+  private inkStray = 9;
+  private inkTapAt = -9;
+  private inkLast: { x: number; y: number; t: number } | null = null;
+  /** Bubble Wrap: the lattice, and per bubble its phase (0 inflated, 1 popping, 2 waiting, 3 refilling) and clock */
+  private wrapL: ReturnType<typeof makeWrapLattice> | null = null;
+  private wrapPhase = new Uint8Array(0);
+  private wrapClock = new Float32Array(0);
+  private wrapWait = new Float32Array(0);
+  private wrapDirty = false;
+  private wrapLastHit: THREE.Vector3 | null = null;
+  private wrapFffAt = -9;
+  /** pop the bubble nearest to a direction (object space), if it is inflated enough; true if it popped */
+  private wrapPop(dir: THREE.Vector3): boolean {
+    const L = this.wrapL;
+    if (!L) return false;
+    let best = -2, bi = -1;
+    for (let i = 0; i < L.n; i++) {
+      const d = dir.x * L.centres[i * 3] + dir.y * L.centres[i * 3 + 1] + dir.z * L.centres[i * 3 + 2];
+      if (d > best) {
+        best = d;
+        bi = i;
+      }
+    }
+    if (bi < 0 || Math.acos(Math.min(1, best)) > L.radius * 1.05) return false;
+    const ph = this.wrapPhase[bi];
+    // a refilling bubble only pops once it is at least 80 % back
+    if (ph === 1 || ph === 2 || (ph === 3 && L.state[bi * 4 + 3] < 0.8)) return false;
+    this.wrapPhase[bi] = 1;
+    this.wrapClock[bi] = 0;
+    // a tiny puff ripples the sheet round it
+    const c = new THREE.Vector3(L.centres[bi * 3], L.centres[bi * 3 + 1], L.centres[bi * 3 + 2]);
+    const rp = this.ripples[this.rippleIdx];
+    rp.set(c.x * 0.35, c.y * 0.35, c.z * 0.35, this.simClock);
+    this.rippleIdx = (this.rippleIdx + 1) % this.ripples.length;
+    const v = c.clone().applyQuaternion(this.group.quaternion);
+    this.opts.onCue?.('pop', 0.75 + 0.25 * Math.random(), Math.max(-1, Math.min(1, v.x * 0.8)));
+    return true;
+  }
+  /** drag: pop every bubble the finger passed over since the last point */
+  private wrapSweep(to: THREE.Vector3) {
+    const from = this.wrapLastHit;
+    this.wrapLastHit = to.clone();
+    if (!from || !this.wrapL) {
+      this.wrapPop(to);
+      return;
+    }
+    const ang = from.angleTo(to);
+    const steps = Math.min(40, Math.ceil(ang / (this.wrapL.radius * 0.6)));
+    const p = new THREE.Vector3();
+    for (let i = 1; i <= steps; i++) {
+      p.copy(from).lerp(to, i / steps).normalize();
+      this.wrapPop(p);
+    }
+  }
+  /**
+   * Lava Lamp physics, slow and heavy: blobs warmed at the bottom grow lighter and rise, cool at
+   * the top and sink back; they drift a little sideways, stretch along their motion, and merge
+   * or pinch apart in the shader's smooth union. A touch warms the liquid near the finger.
+   */
+  private stepLava(dt: number) {
+    const U = this.U;
+    const h = this.heat;
+    h.w = damp(h.w, 0, 0.35, dt);
+    this.blobs.forEach((b, i) => {
+      // heat from the lamp below, cooling near the surface, and the finger's warmth
+      if (b.p.y < -0.5) b.temp += dt * 0.06;
+      if (b.p.y > 0.45) b.temp -= dt * 0.07;
+      b.temp += (0.5 - b.temp) * dt * 0.01;
+      const toH = new THREE.Vector3(h.x, h.y, h.z).sub(b.p);
+      const near = Math.exp(-toH.lengthSq() / 0.18) * h.w;
+      b.temp = Math.min(1, b.temp + near * dt * 0.25);
+      b.v.addScaledVector(toH, near * dt * 0.05);
+      // buoyancy, viscous drag, a slow sideways wander
+      b.v.y += (b.temp - 0.5) * 0.05 * dt;
+      b.v.x += Math.sin(this.floatClock * 0.07 + i * 2.1) * 0.004 * dt;
+      b.v.z += Math.cos(this.floatClock * 0.05 + i * 1.3) * 0.003 * dt;
+      b.v.multiplyScalar(Math.exp(-dt * 0.9));
+      b.p.addScaledVector(b.v, dt);
+      // the bowl: stay inside the glass and under the liquid's surface
+      const lim = 0.9 - b.r;
+      const horiz = Math.hypot(b.p.x, b.p.z);
+      if (horiz > lim * 0.9) {
+        const k = (lim * 0.9) / horiz;
+        b.p.x *= k;
+        b.p.z *= k;
+      }
+      b.p.y = Math.max(-0.66, Math.min(0.8 - b.r, b.p.y));
+      if (b.p.length() > lim) b.p.setLength(lim);
+      U.uBlobs.value[i].set(b.p.x, b.p.y, b.p.z, b.r);
+      const sp = b.v.length();
+      const dir = sp > 1e-5 ? b.v.clone().divideScalar(sp) : new THREE.Vector3(0, 1, 0);
+      U.uBlobS.value[i].set(dir.x, dir.y, dir.z, 1 + Math.min(0.9, sp * 14));
+    });
+    // a soft bloop now and then, as blobs meet or pinch apart
+    for (let i = 0; i < this.blobs.length; i++)
+      for (let j = i + 1; j < this.blobs.length; j++) {
+        const a = this.blobs[i], b = this.blobs[j];
+        const key = i + ':' + j;
+        const touching = a.p.distanceTo(b.p) < (a.r + b.r) * 0.95;
+        if (touching !== this.blobTouching.has(key)) {
+          if (touching) this.blobTouching.add(key);
+          else this.blobTouching.delete(key);
+          if (this.clock - this.blobSoundAt > 3) {
+            this.blobSoundAt = this.clock;
+            this.opts.onCue?.('merge', 0.4, Math.max(-1, Math.min(1, (a.p.x + b.p.x) * 0.6)));
+          }
+        }
+      }
+    // the camera in the bowl's own space, for the ray-march
+    const inv = this.group.quaternion.clone().invert();
+    U.uCamObj.value.copy(this.camera.position).sub(this.group.position).applyQuaternion(inv).divideScalar(BASE_R * this.group.scale.x);
+  }
+  /** soap bubble: how stirred the film is where it was last touched, and how far the bands have turned */
+  private bubbleStir = 0;
+  private bubbleTwist = 0;
+  /** ferrofluid motion: broad humps (0) .. sharp spikes (1), the spikes' sway clock, how fast it runs, how far they sway */
+  private ferroSharp = 0.88;
+  private ferroSwayT = 0;
+  private ferroSwayW = 0.9;
+  private ferroSwayAmt = 0.18;
   private ferroDir = new THREE.Vector3(0, 0, 1);
-  /** Lamplight Snow: sideways drift, the gust now, when the next gust comes, the finger's swirl */
+  /** Snowstorm: how far the wind has carried the snow, how hard it blows now, its clock, when the sound hears next, the finger's swirl */
   private snowWind = 0;
   private gust = 0;
-  private gustAt = 25;
+  private gustAt = 0;
   private gustT = 0;
   private swirl = new THREE.Vector3();
+  /** Sky: the sun's elevation (eased), its direction in the ball, when the next bird may sing */
+  private sunEl = 20;
+  private sunDir = new THREE.Vector3(0, 0.6, 0.5);
+  private birdAt = 20;
   /** Starfall: the falling star in flight (one at a time), and when the next is due */
   private meteorT = -1;
   private meteorDur = 0.6;
@@ -638,15 +822,66 @@ export class OrbScene {
   }
 
   private poke(dir: THREE.Vector3, strength: number) {
+    // Lava Lamp: a touch warms the liquid there (nearby blobs are drawn to it and rise faster);
+    // a tap also lets a little burst of bubbles go
+    if (this.gen.lava > 0.5) {
+      this.heat.set(dir.x * 0.6, dir.y * 0.6, dir.z * 0.6, Math.min(1.5, this.heat.w + 0.5 * strength));
+      if (strength > 0.8) {
+        const sp = this.screenOf(dir);
+        const n = 3 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < n; i++) this.spawnHoneyBubble(sp.x + (Math.random() - 0.5) * 0.08, sp.y - Math.random() * 0.06, 0.012 + Math.random() * 0.02);
+      }
+      this.opts.onTouch?.(strength, Math.max(-1, Math.min(1, dir.x)) * 0.8);
+      this.video.resumeOnGesture();
+      return;
+    }
+    // Ink: a tap lets a fresh drop fall there (at most one every 1.5 s; none in comfort mode);
+    // drags stir the water in onMove and only make the soft stirring sound here
+    if (this.gen.ink > 0.5) {
+      if (strength > 0.8) {
+        const s = store.get();
+        if (this.ink && !(s.comfort || s.reducedMotion) && this.clock - this.inkTapAt > 1.5) {
+          this.inkTapAt = this.clock;
+          const sp = this.screenOf(dir);
+          this.ink.drop({ x: sp.x * 0.5 + 0.5, y: sp.y * 0.5 + 0.5, size: 0.8 });
+          this.opts.onCue?.('plip', 0.8, Math.max(-1, Math.min(1, sp.x)));
+        }
+      } else this.opts.onTouch?.(strength, Math.max(-1, Math.min(1, dir.x)) * 0.8);
+      this.video.resumeOnGesture();
+      return;
+    }
+    // Bubble Wrap: a touch pops what is under it (drags pop along the path in onMove)
+    if (this.gen.wrap > 0.5) {
+      if (strength > 0.8) {
+        this.wrapLastHit = dir.clone();
+        this.wrapPop(dir);
+      }
+      this.video.resumeOnGesture();
+      return;
+    }
     // Frost on Window: the glass frosts over where it is touched
     if (this.gen.frost > 0.5 && strength > 0.8) {
       this.U.uFrostTouch.value[this.frostIdx].set(dir.x, dir.y, dir.z, this.patternTime);
       this.frostIdx = (this.frostIdx + 1) % this.U.uFrostTouch.value.length;
     }
-    // Lamplight Snow: the finger stirs the air; the flakes swirl round it
-    if (this.gen.snow > 0.3) {
+    // Liquid Gold: a touch lets air bubbles go; they rise slowly through the gold
+    if (this.gen.honey > 0.5) {
       const sp = this.screenOf(dir);
-      this.swirl.set(sp.x, sp.y, Math.min(2.4, this.swirl.z + 1.1 * strength));
+      if (strength > 0.8) {
+        const n = 1 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < n; i++) this.spawnHoneyBubble(sp.x + (Math.random() - 0.5) * 0.14, sp.y - 0.04 - Math.random() * 0.12, 0.02 + Math.random() * 0.045);
+      } else if (Math.random() < 0.25) this.spawnHoneyBubble(sp.x, sp.y - 0.05, 0.012 + Math.random() * 0.02);
+    }
+    // Soap Bubble: the colour bands swirl faster round the touch, then calm
+    if (this.gen.bubble > 0.3) {
+      const bt = this.U.uBubbleTouch.value;
+      if (this.bubbleTwist * this.bubbleTwist < 0.5) bt.set(dir.x, dir.y, dir.z, this.bubbleTwist);
+      this.bubbleStir = Math.min(1.5, this.bubbleStir + 0.6 * strength * strength);
+    }
+    // Snowstorm: the finger stirs the air; the flakes swirl softly round it (Sky: wisps curl)
+    if (this.gen.snow > 0.3 || this.gen.sky > 0.3) {
+      const sp = this.screenOf(dir);
+      this.swirl.set(sp.x, sp.y, Math.min(1.8, this.swirl.z + 0.8 * strength));
     }
     // Starfall: a tap brings a falling star near the finger, at most one every 4 s
     if (this.gen.stars > 0.5) {
@@ -712,6 +947,12 @@ export class OrbScene {
     this.pressed = true;
     this.pressT = 0;
     d.last.copy(hit);
+    if (this.gen.honey > 0.5) {
+      const sp = this.screenOf(hit);
+      const th = this.thread;
+      Object.assign(th, { state: 1, ax: sp.x, ay: sp.y, ex: sp.x, ey: sp.y, tx: sp.x, ty: sp.y, sag: 0 });
+      th.dir.copy(hit);
+    }
     this.poke(hit, 1);
   };
 
@@ -726,10 +967,32 @@ export class OrbScene {
     d.y = e.clientY;
     d.t = e.timeStamp;
     this.idle = 0;
-    this.turn(dx, dy);
+    // Liquid Gold resists: the ball turns less, and the thread's end follows the finger anywhere
+    this.turn(dx * (1 - 0.6 * this.gen.honey), dy * (1 - 0.6 * this.gen.honey));
+    if (this.gen.ink > 0.5 && this.ink && d.onBall) {
+      // stirring: the water follows the finger, curling into eddies behind it
+      const f = this.fingerOrb(e.clientX, e.clientY);
+      const now = e.timeStamp / 1000;
+      const last = this.inkLast;
+      if (last && now > last.t) {
+        const k = (store.get().comfort ? 0.4 : 1) * 0.5 / Math.max(0.016, now - last.t);
+        const clampV = (v: number) => Math.max(-0.6, Math.min(0.6, v));
+        this.ink.stir(f.x * 0.5 + 0.5, f.y * 0.5 + 0.5, clampV((f.x - last.x) * k), clampV((f.y - last.y) * k));
+      }
+      this.inkLast = { x: f.x, y: f.y, t: now };
+    }
+    if (this.thread.state === 1) {
+      const f = this.fingerOrb(e.clientX, e.clientY);
+      this.thread.tx = f.x;
+      this.thread.ty = f.y;
+    }
     if (!d.onBall) return;
     const hit = this.hitTest(e.clientX, e.clientY);
     if (!hit) return;
+    if (this.gen.wrap > 0.5) {
+      this.wrapSweep(hit); // like running a thumb along it: every bubble passed over pops
+      return;
+    }
     const dist = hit.angleTo(d.last);
     const since = this.clock - d.lastT;
     if (since > 0.22 && Math.hypot(dx, dy) > 0.004) {
@@ -745,7 +1008,19 @@ export class OrbScene {
     d.active = false;
     d.id = -1;
     this.pressed = false;
+    this.letGoThread();
+    this.wrapLastHit = null;
+    this.inkLast = null;
   };
+
+  /** the thread lets go: a few slow sticky clicks, then it sags back into the honey */
+  private letGoThread() {
+    const th = this.thread;
+    if (th.state !== 1) return;
+    th.state = 2;
+    const len = Math.hypot(th.ex - th.ax, th.ey - th.ay);
+    if (len > 0.08) this.opts.onCue?.('tack', Math.min(1, 0.3 + len), Math.max(-1, Math.min(1, th.ex * 0.6)));
+  }
 
   private onLeave = () => {
     this.hoverAsk.yaw = this.hoverAsk.pitch = 0;
@@ -964,7 +1239,7 @@ export class OrbScene {
     const yawT = soft(this.ask.yaw + this.hoverAsk.yaw * quiet, 0.5) + 0.085 * Math.sin(sw * 0.31) * quiet;
     const pitchT = soft(this.ask.pitch + this.hoverAsk.pitch * quiet, 0.34) + 0.045 * Math.sin(sw * 0.23 + 1) * quiet;
     const prevYaw = this.tilt.yaw, prevPitch = this.tilt.pitch;
-    const ease = this.drag.active ? 7 : 2.2;
+    const ease = this.drag.active ? 7 - 5 * this.gen.honey : 2.2; // honey lags behind the hand
     this.tilt.yaw = damp(this.tilt.yaw, yawT, ease, dt);
     this.tilt.pitch = damp(this.tilt.pitch, pitchT, ease, dt);
     if (dt > 0) this.spin.set((this.tilt.pitch - prevPitch) / dt, (this.tilt.yaw - prevYaw) / dt, 0);
@@ -1092,6 +1367,11 @@ export class OrbScene {
     this.skin.forEach((m) => (m.visible = creature < 0.985));
     this.artOn = damp(this.artOn, s.artist === 'default' ? 0 : 1, 1.6, dt);
     U.uArtTint.value = this.artOn;
+    // full scenes replace the skin the artist is drawn on, so they take the artist as a grade
+    {
+      const scene = Math.min(1, g.snow + g.stars + g.sky + g.ink);
+      U.uSceneArt.value.set(0, f.aperFlat, this.artOn * scene, scene);
+    }
     this.printOn = damp(this.printOn, s.artist === 'default' && s.pattern === 'opcell' ? 0 : 1, 1.6, dt);
     U.uPrint.value = this.printOn;
     // orchid: the bloom unfurls from a closed bud over ~9 s
@@ -1108,27 +1388,133 @@ export class OrbScene {
     } else this.growT = 0;
     U.uSquash.value = g.sss;
     U.uRoot.value = g.root;
+    U.uLava.value = g.lava;
+    if (g.lava > 0.001) this.stepLava(dt * this.pace * (s.comfort || s.reducedMotion ? 0.5 : 1));
+    U.uInk.value = g.ink;
+    if (g.ink > 0.001) {
+      if (!this.ink) {
+        this.ink = new InkSim(this.renderer);
+        this.disposables.push(this.ink);
+        this.inkNext = 0;
+      }
+      const calm = s.comfort || s.reducedMotion;
+      const idt = dt * this.pace * (calm ? 0.6 : 1);
+      // a new drop falls in from the top every 20-40 s, so there is always some ink, never too much
+      this.inkNext -= idt;
+      if (this.inkNext <= 0 && g.ink > 0.5) {
+        this.ink.drop({ x: 0.36 + Math.random() * 0.28, y: 0.86, size: 0.85 + Math.random() * 0.4 });
+        this.inkNext = 20 + Math.random() * 20;
+        this.opts.onCue?.('plip', 0.45, (Math.random() - 0.5) * 0.6);
+      }
+      // now and then a tiny stray droplet, trailing a hair-thin thread
+      this.inkStray -= idt;
+      if (this.inkStray <= 0) {
+        this.ink.drop({ x: 0.25 + Math.random() * 0.5, y: 0.8 + Math.random() * 0.08, size: 0.28 });
+        this.inkStray = 12 + Math.random() * 18;
+      }
+      this.ink.step(idt, { buoy: calm ? 0.05 : 0.09, life: 90 });
+      U.uInkTex.value = this.ink.texture;
+    }
+    U.uWrap.value = g.wrap;
+    if (g.wrap > 0.001) {
+      if (!this.wrapL) {
+        this.wrapL = makeWrapLattice();
+        this.disposables.push(this.wrapL.map, this.wrapL.tex);
+        const n = this.wrapL.n;
+        this.wrapPhase = new Uint8Array(n);
+        this.wrapClock = new Float32Array(n);
+        this.wrapWait = new Float32Array(n);
+        U.uWrapN.value.set(n, this.wrapL.radius);
+      }
+      U.uWrapMap.value = this.wrapL.map;
+      U.uWrapTex.value = this.wrapL.tex;
+      const st = this.wrapL.state;
+      for (let i = 0; i < this.wrapL.n; i++) {
+        const ph = this.wrapPhase[i];
+        if (ph === 0) continue;
+        this.wrapClock[i] += dt;
+        const t = this.wrapClock[i];
+        let a = 1;
+        if (ph === 1) {
+          // pop: a quick squash, then it collapses into crinkles (about 0.1 s)
+          a = t < 0.025 ? 1 + 0.18 * (t / 0.025) : Math.max(0, 1.18 * (1 - (t - 0.025) / 0.08));
+          if (t > 0.11) {
+            this.wrapPhase[i] = 2;
+            this.wrapClock[i] = 0;
+            this.wrapWait[i] = 4 + Math.random() * 8; // each waits its own 4-12 s, so they refill one by one
+            a = 0;
+          }
+        } else if (ph === 2) {
+          a = 0;
+          if (t > this.wrapWait[i]) {
+            this.wrapPhase[i] = 3;
+            this.wrapClock[i] = 0;
+            if (this.clock - this.wrapFffAt > 0.7) {
+              this.wrapFffAt = this.clock;
+              this.opts.onCue?.('refill', 0.5, (Math.random() - 0.5) * 1.2);
+            }
+          }
+        } else {
+          // refill: the crinkles smooth out and the dome rises over about 1.5 s
+          const k = Math.min(1, t / 1.5);
+          a = k * k * (3 - 2 * k);
+          if (k >= 1) this.wrapPhase[i] = 0;
+        }
+        st[i * 4 + 3] = a;
+        this.wrapDirty = true;
+      }
+      if (this.wrapDirty) {
+        this.wrapL.tex.needsUpdate = true;
+        this.wrapDirty = false;
+      }
+    }
     U.uBubble.value = g.bubble;
+    if (g.bubble > 0.001) {
+      // the stir fades over a few seconds; the twist it left in the bands unwinds more slowly still
+      // the stir (stronger the faster the drag) winds the bands into an oily spiral round the
+      // touch; it relaxes back into the normal flow over two or three seconds
+      this.bubbleStir = damp(this.bubbleStir, 0, 1.4, dt);
+      this.bubbleTwist += dt * this.pace * this.bubbleStir * 2.2;
+      this.bubbleTwist *= Math.exp(-dt * 0.8);
+      U.uBubbleTouch.value.w = this.bubbleTwist;
+    }
+    U.uWobble.value = g.bubble * (reduced ? 0.4 : 1);
     U.uSnow.value = g.snow;
     U.uStars.value = g.stars;
-    // night backdrop for the two night scenes, blended by their weights
-    {
-      const night = Math.min(1, g.snow + g.stars);
-      U.uNight.value.set(night, night > 0.001 ? g.stars / Math.max(1e-3, g.snow + g.stars) : 0);
-    }
     if (g.snow > 0.001) {
-      // a soft breeze, and a gentle gust every 20-40 s: never a blizzard
-      this.gustT += dt;
-      if (this.gustT > this.gustAt) {
-        this.gustT = 0;
-        this.gustAt = 8 + Math.random() * 10;
+      // a calm storm: the wind swings slowly left and right in long waves (about 17 s and 41 s),
+      // never violent; the snow follows it in curtains and the sound swells with it
+      this.gustT += dt * this.pace * (reduced ? 0.5 : 1);
+      const tau = Math.PI * 2;
+      const wave = 0.65 * Math.sin((this.gustT * tau) / 17) + 0.35 * Math.sin((this.gustT * tau) / 41 + 1);
+      const vel = 0.012 + 0.035 * wave;
+      this.snowWind += dt * this.pace * vel * (reduced ? 0.5 : 1);
+      this.gust = damp(this.gust, Math.abs(wave), 1.5, dt);
+      U.uSnowWind.value.set(this.snowWind, vel * 5);
+      this.gustAt -= dt;
+      if (this.gustAt <= 0) {
+        this.gustAt = 0.25;
+        this.opts.onDrive?.('wind', this.gust * Math.min(1, g.snow));
       }
-      const gw = Math.max(0, Math.sin(Math.min(1, this.gustT / 6) * Math.PI)) * (this.gustT < 6 ? 1 : 0);
-      this.gust = damp(this.gust, gw, 1.2, dt);
-      this.snowWind += dt * this.pace * (0.05 + 0.12 * this.gust) * (reduced ? 0.5 : 1);
-      U.uSnowWind.value.set(this.snowWind, this.gust);
-      this.swirl.z = damp(this.swirl.z, 0, 0.6, dt); // the air settles back slowly
-      U.uSwirl.value.set(this.swirl.x, this.swirl.y, this.swirl.z, 0);
+    }
+    this.swirl.z = damp(this.swirl.z, 0, 0.6, dt); // the air settles back slowly
+    U.uSwirl.value.set(this.swirl.x, this.swirl.y, this.swirl.z, 0);
+    if (g.sky > 0.001) {
+      // the sun where the real sun is (Central European time, or the scrubbed hour): it rises on
+      // the left, stands highest at midday and sets on the right
+      const d = effectiveDate(s.time);
+      const hour = d.getHours() + d.getMinutes() / 60;
+      const ha = Math.max(-1.5, Math.min(1.5, (hour - 12.5) / 6));
+      const el = (this.sunEl = damp(this.sunEl, this.moodTarget.elevation, 1.5, dt));
+      const er = (el * Math.PI) / 180;
+      this.sunDir.set(Math.sin(ha * 0.9) * Math.cos(er), Math.sin(er), Math.cos(ha * 0.9) * Math.cos(er)).normalize();
+      U.uSun.value.set(this.sunDir.x, this.sunDir.y, this.sunDir.z, el / 90);
+      // very occasionally, distant birdsong, in daylight only
+      this.birdAt -= dt;
+      if (this.birdAt <= 0) {
+        this.birdAt = 25 + Math.random() * 50;
+        if (g.sky > 0.5 && el > 3) this.opts.onCue?.('bird', 0.3 + 0.3 * Math.random(), (Math.random() - 0.5) * 1.4);
+      }
     }
     if (g.stars > 0.001) {
       // the sky turns a few degrees a minute
@@ -1154,8 +1540,73 @@ export class OrbScene {
       this.meteorT = -1;
     }
     U.uHoney.value = g.honey;
-    U.uField.value = g.lightfield;
-    U.uMilk.value = g.milk;
+    if (g.honey > 0.001 || g.lava > 0.001) {
+      const ht = dt * this.pace * (reduced ? 0.6 : 1);
+      this.honeyT += ht;
+      U.uHoneyT.value = this.honeyT;
+      // now and then a bubble comes up from the bottom by itself
+      this.honeyBubNext -= ht;
+      if (this.honeyBubNext <= 0 && g.honey > 0.5) {
+        this.spawnHoneyBubble((Math.random() - 0.5) * 1.0, -0.72 - Math.random() * 0.1, 0.025 + Math.random() * 0.04);
+        this.honeyBubNext = 10 + Math.random() * 12;
+      }
+      if (this.honeyBubNext <= 0 && g.lava > 0.5) {
+        this.spawnHoneyBubble((Math.random() - 0.5) * 0.9, -0.6, 0.008 + Math.random() * (Math.random() < 0.2 ? 0.03 : 0.012));
+        this.honeyBubNext = 3 + Math.random() * 6;
+      }
+      // where a bubble reaches the surface: the top of the ball for honey, the liquid's level for the lamp
+      const lava = g.lava > g.honey;
+      // a bubble reaching the surface: a low, muffled blup, then it is gone
+      U.uHoneyBub.value.forEach((v, i) => {
+        if (v.w < 0) return;
+        const bp = this.honeyBubPos(v);
+        const r = Math.hypot(bp.x, bp.y);
+        if (r > 0.87 && !this.honeyBlup[i]) {
+          this.honeyBlup[i] = true;
+          this.opts.onCue?.('blup', Math.min(1, (lava ? 0.15 : 0.3) + v.z * 8), Math.max(-1, Math.min(1, bp.x)));
+        }
+        if (r > 0.95) v.w = -1;
+      });
+    }
+    if (g.honey > 0.001) {
+      // the thread: its end lags the finger; it thins as it stretches and sags under its weight
+      const th = this.thread;
+      if (th.state === 1) {
+        const k = 1 - Math.exp(-dt * 2.2);
+        th.ex += (th.tx - th.ex) * k;
+        th.ey += (th.ty - th.ey) * k;
+        const len = Math.hypot(th.ex - th.ax, th.ey - th.ay);
+        th.life = damp(th.life, 1, 6, dt);
+        th.w = 0.06 / Math.sqrt(1 + 5 * len);
+        th.sag = 0.22 * len * len;
+        if (len > 0.75 && this.clock - th.creakAt > 1.8) {
+          th.creakAt = this.clock;
+          this.opts.onCue?.('creak', Math.min(1, len - 0.4), Math.max(-1, Math.min(1, th.ex * 0.6)));
+        }
+        if (len > 1.45) this.letGoThread(); // stretched too far: it lets go by itself
+        U.uPull.value.set(th.dir.x, th.dir.y, th.dir.z, damp(U.uPull.value.w, Math.min(1, len * 1.3), 3, dt));
+      } else if (th.state === 2) {
+        // falling back: the free end sinks back toward the honey, the thread thinning as it goes
+        const k = 1 - Math.exp(-dt * 1.3);
+        th.ex += (th.ax - th.ex) * k;
+        th.ey += (th.ay - 0.08 - th.ey) * k;
+        th.sag = damp(th.sag, 0.12, 1.5, dt);
+        th.w *= Math.exp(-dt * 0.5);
+        th.life -= dt / 2.6;
+        if (th.life <= 0) {
+          th.life = 0;
+          th.state = 0;
+        }
+        U.uPull.value.w = damp(U.uPull.value.w, 0, 1.4, dt);
+      } else U.uPull.value.w = damp(U.uPull.value.w, 0, 1.4, dt);
+      U.uThreadA.value.set(th.ax, th.ay, th.ex, th.ey);
+      U.uThreadB.value.set(th.w, th.sag, th.life * th.life * (3 - 2 * th.life) * Math.min(1, g.honey * 1.5), 0);
+    } else {
+      this.thread.state = 0;
+      this.thread.life = 0;
+      U.uThreadB.value.z = 0;
+      U.uPull.value.w = 0;
+    }
     U.uSky.value = g.sky;
     U.uFrost.value = g.frost;
     U.uFerroLook.value = g.ferro;
@@ -1173,7 +1624,15 @@ export class OrbScene {
       }
       const held = this.pressed ? 1 : 0;
       const breathe = this.sessionW * (this.breath - 0.5) * 0.35;
-      this.ferroAmp = damp(this.ferroAmp, 0.62 + 0.38 * held + breathe, held ? 1.6 : 0.9, dt);
+      // timed from the reference video, played about 35 % slower: a held touch lifts the field in
+      // about half a second, ridges first, then they sharpen into spikes; the spikes then rise and
+      // sink out of step (about every 1.9 s while held, a slow ~7 s drift at rest)
+      this.ferroAmp = damp(this.ferroAmp, 0.62 + 0.38 * held + breathe, held ? 5 : 0.9, dt);
+      this.ferroSharp = damp(this.ferroSharp, held ? 1 : 0.88, held ? 3.2 : 0.8, dt);
+      this.ferroSwayW = damp(this.ferroSwayW, held ? 3.4 : 0.9, held ? 2.5 : 0.6, dt);
+      this.ferroSwayAmt = damp(this.ferroSwayAmt, held ? 0.3 : 0.18, 1.2, dt);
+      this.ferroSwayT += dt * this.ferroSwayW * this.pace * (reduced ? 0.5 : 1);
+      U.uFerroMotion.value.set(this.ferroSharp, this.ferroSwayT, this.ferroSwayAmt * (reduced ? 0.5 : 1));
       this.ferroFocus = damp(this.ferroFocus, held ? 1 : 0.2, held ? 1.8 : 0.7, dt);
       const p = U.uPoke.value as THREE.Vector3;
       const want = held && p.y < 5 ? p : U.uFront.value;
@@ -1184,7 +1643,6 @@ export class OrbScene {
     U.uFerro.value = g.ferro * this.ferroAmp;
     U.uSss.value = g.sss;
     U.uMatte.value = g.matte;
-    U.uAuraMat.value = g.aura;
     if (g.root > 0.001 && !this.rootTex) {
       this.rootTex = makeRootTexture();
       this.disposables.push(this.rootTex);
@@ -1216,7 +1674,7 @@ export class OrbScene {
       U.uAura.value.set(
         0.75 * Math.cos(a * 1.3) * k + this.lean.x * 1.2,
         0.5 * Math.sin(a * 0.9) * k + this.lean.y * 1.2,
-        (0.045 + 0.05 * U.uSonic.value.x * (0.7 + 0.3 * Math.sin(U.uSonicT.value * 0.5)) + 0.03 * this.gen.aura + 0.03 * br + 0.02 * Math.min(1, this.spin.length())) * dimmed,
+        (0.045 + 0.05 * U.uSonic.value.x * (0.7 + 0.3 * Math.sin(U.uSonicT.value * 0.5)) + 0.03 * br + 0.02 * Math.min(1, this.spin.length())) * dimmed,
         this.holdW + glow * (1 - this.holdW),
       );
       U.uBloom.value = Math.max(U.uBloom.value, this.openGlow * 0.25);
@@ -1280,9 +1738,9 @@ export class OrbScene {
     U.uFieldTime.value = this.fieldTime;
     // the deep sea: bioluminescence looks best in the dark, so the field dims under medusa
     // deep space / deep sea: the field dims for the nebula and the medusa
-    U.uFieldLevel.value = (1 - 0.75 * Math.max(g.petal, g.gill)) * (1 - 0.97 * g.emit) * (1 - 0.85 * g.nebula) * (0.034 + 0.026 * f.glow / 0.38) * (0.55 + 0.45 * this.lightInt) * (1 - ganz * 0.5);
+    U.uFieldLevel.value = (1 - 0.5 * Math.max(g.snow, g.stars)) * (1 - 0.75 * Math.max(g.petal, g.gill)) * (1 - 0.97 * g.emit) * (1 - 0.85 * g.nebula) * (0.034 + 0.026 * f.glow / 0.38) * (0.55 + 0.45 * this.lightInt) * (1 - ganz * 0.5);
     this.paletteJS(this.patternTime * 0.03 + 0.4, U.uBleed.value).multiply(lightK);
-    U.uBleedAmt.value = (0.055 + f.glow * 0.12) * (1 - 0.6 * Math.max(g.nebula, g.petal, g.gill)) * (1 - 0.96 * g.emit) + this.sessionW * (0.02 + 0.04 * this.breath) + fogAmt * 0.03 + this.holdW * 0.05 + this.gen.lightfield * 0.2;
+    U.uBleedAmt.value = (0.055 + f.glow * 0.12) * (1 - 0.6 * Math.max(g.nebula, g.petal, g.gill)) * (1 - 0.96 * g.emit) + this.sessionW * (0.02 + 0.04 * this.breath) + fogAmt * 0.03 + this.holdW * 0.05;
     this.updateOrbScreen();
 
     this.paletteJS(this.patternTime * 0.03 + 0.125, this.tmpC);
@@ -1291,7 +1749,7 @@ export class OrbScene {
       .multiplyScalar(0.85)
       .multiply(this.tmpC2.setRGB(1, 1, 1).lerp(this.lightColor, 0.38).multiplyScalar(this.lightInt).add(this.ambient));
 
-    this.bloom.strength = (s.comfort ? 0.6 : 1) * (0.4 - ganz * 0.22 - this.sessionW * 0.1 + f.disc * 0.12 + U.uBloom.value * 0.3 + this.holdW * 0.06 + this.gen.lightfield * 0.55);
+    this.bloom.strength = (s.comfort ? 0.6 : 1) * (0.4 - ganz * 0.22 - this.sessionW * 0.1 + f.disc * 0.12 + U.uBloom.value * 0.3 + this.holdW * 0.06);
     U.uBleedAmt.value += U.uBloom.value * 0.14;
 
     this.composer.render(dt);

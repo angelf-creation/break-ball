@@ -18,7 +18,6 @@ import type { SoundSpec } from '../audio/spec';
  *                             volumes in scene/creatures.ts that replace the skin
  *   4  (also)                 specks: bioluminescent motes that flash when disturbed
  *   4  Particulate              dust, specks, nebula
- *   5  Diffused light           aura
  *   6  Soft body + subsurface   soft (wrapped light, translucency) + physics.jelly
  *
  * Adding a material = add its id to MaterialId / MATERIAL_ORDER, add a row here
@@ -60,34 +59,34 @@ export interface GeneratorMix {
   specks: number;
   /** 4: suspended motes */
   dust: number;
-  /** light diffused through frosted glass (Soft Light) */
-  aura: number;
   /** 6: wrapped light / subsurface glow */
   soft: number;
   /** soap bubble: a swirling interference film over almost nothing */
   bubble: number;
-  /** milk poured into iced coffee: cream plumes through espresso */
-  milk: number;
   /** ferrofluid: black mirror liquid raised into spikes by a field (touch is the magnet) */
   ferro: number;
   /** a ball of daytime sky with drifting cumulus */
   sky: number;
   /** frost ferns growing over a sunlit window */
   frost: number;
-  /** honey: thick amber, slow folds, glowing from inside */
+  /** Liquid Gold: clear honey, coiling folds, rising air bubbles, sticky threads */
   honey: number;
-  /** Turrell: a pure field of light, edges dissolved, colour drifting over minutes */
-  lightfield: number;
-  /** Lamplight Snow: the warm halo of a street lamp with snow falling through it (night backdrop) */
+  /** Snowstorm: a lamplit night street in perspective, powder snow in slow curtains (night backdrop) */
   snow: number;
   /** Starfall: a deep-blue glass sky of stars, with falling stars (night backdrop) */
   stars: number;
+  /** Ink: black ink sinking and curling through clear water, on white (a simulated ink field) */
+  ink: number;
+  /** Lava Lamp: a glass ball of clear liquid, ray-marched wax blobs lit from below, rising and sinking */
+  lava: number;
+  /** Bubble Wrap: the ball wrapped in bubble wrap; every bubble pops and slowly refills */
+  wrap: number;
 }
 
 export const NONE: GeneratorMix = {
   origin: 0, refract: 0, absorb: 0, clarity: 0, caustic: 0,
-  film: 0, root: 0, petal: 0, gill: 0, sss: 0, nebula: 0, crack: 0, matte: 0, emit: 0, specks: 0, dust: 0, aura: 0, soft: 0,
-  bubble: 0, milk: 0, ferro: 0, sky: 0, frost: 0, honey: 0, lightfield: 0, snow: 0, stars: 0,
+  film: 0, root: 0, petal: 0, gill: 0, sss: 0, nebula: 0, crack: 0, matte: 0, emit: 0, specks: 0, dust: 0, soft: 0,
+  bubble: 0, ferro: 0, sky: 0, frost: 0, honey: 0, snow: 0, stars: 0, ink: 0, wrap: 0, lava: 0,
 };
 export const GEN_KEYS = Object.keys(NONE) as (keyof GeneratorMix)[];
 
@@ -103,7 +102,7 @@ export interface MaterialPhysics {
   spring?: number;
 }
 
-export type MaterialGroupId = 'light' | 'glass' | 'mineral' | 'soft' | 'organic' | 'atmosphere';
+export type MaterialGroupId = 'light' | 'glass' | 'mineral' | 'soft' | 'organic' | 'atmosphere' | 'play';
 
 export interface MaterialPreset {
   id: MaterialId;
@@ -130,6 +129,7 @@ export const MATERIAL_GROUPS: { id: MaterialGroupId; label: string }[] = [
   { id: 'soft', label: 'Soft' },
   { id: 'organic', label: 'Organic' },
   { id: 'atmosphere', label: 'Atmosphere' },
+  { id: 'play', label: 'Toy & Play' },
 ];
 
 export const MATERIALS: MaterialPreset[] = [
@@ -143,20 +143,6 @@ export const MATERIALS: MaterialPreset[] = [
       event: { voice: 'pluck', wave: 'triangle', notes: [196, 261.63, 293.66, 329.63, 392], ambientOctave: 1, lowpass: 900, decay: [0.9, 1.6], amp: 0.045 },
       rate: 0.22,
     },
-  },
-  {
-    // after James Turrell: no object, only light. The edge dissolves into the room and the
-    // colour drifts mauve, apricot, seafoam, dusty rose over several minutes. Touch does nothing.
-    id: 'turrell', label: 'Turrell', hint: 'A field of light with no edge, colour drifting over minutes', group: 'light', sessionSafe: true,
-    swatch: 'radial-gradient(circle,#ffc49a,#c79bb5 45%,#9fd9c6 80%)',
-    gen: { ...NONE, lightfield: 1, matte: 1 },
-    physics: { rippleK: 1, rippleSpeed: 0.1, rippleDecay: 3, rippleAmp: 0, jelly: 0, fluid: 0 },
-    sound: {
-      bed: [{ kind: 'tones', wave: 'sine', freqs: [196, 293.66, 392], levels: [1, 0.45, 0.15], filter: { type: 'lowpass', freq: 600 }, gain: 0.026, swell: { rate: 0.015, depth: 0.4 } }],
-      event: { voice: 'swell', color: 'pink', dur: [3, 5], sweep: [180, 520, 170], amp: 0.02 },
-      rate: 0.02,
-    },
-    pairsWith: ['m42', 'm60'],
   },
   {
     id: 'glass', label: 'Glass', hint: 'Refraction, colour in the body', group: 'glass', sessionSafe: true,
@@ -181,48 +167,87 @@ export const MATERIALS: MaterialPreset[] = [
     },
   },
   {
-    // after soap bubbles on black: colour swirls in the film, thinning to gold and black at the top
-    id: 'bubble', label: 'Soap Bubble', hint: 'A soap film, colours swirling as it thins', group: 'glass', sessionSafe: true,
+    // a real soap film: almost nothing there, colour only where it reflects; bands flow, drain and thin
+    id: 'bubble', label: 'Soap Bubble', hint: 'A floating soap film, colour bands flowing as it drains; touch it and it dents and wobbles', group: 'glass', sessionSafe: true,
     swatch: 'radial-gradient(circle at 40% 35%,#ffcf6a,#d43ad6 35%,#2e7bff 60%,#0a0612 85%)',
     gen: { ...NONE, bubble: 1 },
-    physics: { rippleK: 14, rippleSpeed: 0.5, rippleDecay: 1.4, rippleAmp: 0.012, jelly: 0.45, fluid: 0.25, spring: 30 },
+    physics: { rippleK: 8, rippleSpeed: 0.4, rippleDecay: 1.2, rippleAmp: 0.014, jelly: 0.55, fluid: 0.2, spring: 20 },
     sound: {
-      // a faint liquid shimmer; touches are tiny, soft pops
-      bed: [{ kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 520, q: 1.5 }, gain: 0.006, lfo: { target: 'freq', rate: 0.07, depth: 150 } }],
-      event: { voice: 'drop', range: [380, 600], chirp: 1.4, decay: 0.045, amp: 0.03, echo: 0.2 },
-      rate: 0.25,
+      // airy micro-shimmer; a touch is a soft, wet tick, never a pop
+      bed: [
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 560, q: 2 }, gain: 0.005, lfo: { target: 'freq', rate: 0.09, depth: 140 } },
+        { kind: 'noise', color: 'white', filter: { type: 'bandpass', freq: 3200, q: 1.2 }, gain: 0.0012, lfo: { target: 'gain', rate: 0.05, depth: 0.0008 } },
+      ],
+      event: { voice: 'drop', range: [420, 600], chirp: 1.3, decay: 0.03, amp: 0.022, echo: 0 },
+      rate: 0.04,
     },
   },
   {
-    // a ball of honey: thick amber, slow folds drawing down through it, glowing where it is thin
-    id: 'honey', label: 'Honey', hint: 'Thick golden honey, folding slowly; it gives under your touch', group: 'glass', sessionSafe: true,
-    swatch: 'radial-gradient(circle at 40% 35%,#ffe08a,#f2a21c 40%,#7a3305 85%)',
+    // liquid gold: clear honey held up to the light, folding on itself, air bubbles rising slowly
+    id: 'honey', label: 'Liquid Gold', hint: 'Clear liquid gold; drag to pull sticky threads, touch to let bubbles rise', group: 'glass', sessionSafe: true,
+    swatch: 'radial-gradient(circle at 40% 35%,#fff3b0,#ffc22e 35%,#d97a06 70%,#5a2402)',
     gen: { ...NONE, honey: 1 },
-    physics: { rippleK: 6, rippleSpeed: 0.18, rippleDecay: 1.1, rippleAmp: 0.02, jelly: 0.75, fluid: 0.55, spring: 14 },
+    physics: { rippleK: 5, rippleSpeed: 0.12, rippleDecay: 0.9, rippleAmp: 0.016, jelly: 0.6, fluid: 0.45, spring: 9 },
     sound: {
-      // creamy and slow: a soft stir in the jar, and now and then a long, sticky pull
+      // thick and slow: a low, warm stir; dragging is a soft wet suction
       bed: [
-        { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 380 }, gain: 0.026, lfo: { target: 'gain', rate: 0.03, depth: 0.008 } },
-        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 260, q: 0.8 }, gain: 0.012, lfo: { target: 'freq', rate: 0.06, depth: 60 } },
+        { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 320 }, gain: 0.022, lfo: { target: 'gain', rate: 0.03, depth: 0.007 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 230, q: 1 }, gain: 0.008, lfo: { target: 'freq', rate: 0.05, depth: 40 } },
       ],
-      event: { voice: 'swell', color: 'brown', dur: [1.3, 2.3], sweep: [160, 400, 150], amp: 0.075 },
-      rate: 0.12,
+      event: { voice: 'swell', color: 'brown', dur: [0.35, 0.6], sweep: [150, 420, 160], amp: 0.06 },
+      // ambient sounds come from the scene: bubbles reaching the surface
+      rate: 0.0001,
+      cues: {
+        // a thread letting go: a few slow, sticky clicks
+        tack: { voice: 'crackle', ticks: [3, 2], spread: 0.04, band: [260, 560], q: 2.5, settle: 0, amp: 0.03, gap: [0.05, 0.12] },
+        // a bubble reaching the surface: a low, muffled blup
+        blup: { voice: 'gloop', range: [150, 210], rise: 1.6, dur: [0.26, 0.3], count: [1, 1], squelch: 0.5, amp: 0.06 },
+        // a heavy pull: a faint low creak
+        creak: { voice: 'crackle', ticks: [22, 14], spread: 0, band: [150, 320], q: 6, settle: 0, amp: 0.016, gap: [0.018, 0.03] },
+      },
     },
   },
   {
-    // cream poured into iced coffee: white plumes curling down through espresso, amber where they thin
-    id: 'milk', label: 'Milk in Coffee', hint: 'Cream curling slowly through cold coffee', group: 'glass', sessionSafe: true,
-    swatch: 'linear-gradient(160deg,#f6ecdf,#c98a4b 40%,#2a1408 75%)',
-    gen: { ...NONE, milk: 1 },
-    physics: { rippleK: 9, rippleSpeed: 0.3, rippleDecay: 1.6, rippleAmp: 0.008, jelly: 0.05, fluid: 0.3 },
+    // black ink falling through clear water: plumes rolling into vortex rings, fine tendrils, grey veils
+    id: 'ink', label: 'Ink', hint: 'Black ink sinking through clear water; tap to drop more, drag to stir', group: 'glass', sessionSafe: true,
+    swatch: 'radial-gradient(circle at 50% 35%,#111,#444 30%,#cfcfcf 60%,#f4f4f4)',
+    gen: { ...NONE, ink: 1, matte: 1 },
+    physics: { rippleK: 1, rippleSpeed: 0.1, rippleDecay: 3, rippleAmp: 0, jelly: 0, fluid: 0 },
     sound: {
-      // a soft, velvety hiss and a warm low swirl
+      // a very quiet underwater hush; stirring is a soft, low movement of water
       bed: [
-        { kind: 'noise', color: 'pink', filter: { type: 'lowpass', freq: 600, q: 0.4 }, gain: 0.02, lfo: { target: 'gain', rate: 0.04, depth: 0.008 } },
-        { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 300 }, gain: 0.02 },
+        { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 300 }, gain: 0.02, lfo: { target: 'gain', rate: 0.03, depth: 0.006 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 260, q: 0.9 }, gain: 0.005, lfo: { target: 'freq', rate: 0.04, depth: 50 } },
       ],
-      event: { voice: 'swell', color: 'pink', dur: [1.4, 2.4], sweep: [180, 560, 170], amp: 0.03 },
-      rate: 0.07,
+      event: { voice: 'swell', color: 'brown', dur: [0.7, 1.1], sweep: [150, 380, 150], amp: 0.04 },
+      rate: 0.0001,
+      cues: {
+        // a drop entering: a soft, muffled plip
+        plip: { voice: 'gloop', range: [320, 480], rise: 1.5, dur: [0.09, 0.11], count: [1, 1], squelch: 0.2, amp: 0.035 },
+      },
+    },
+  },
+  {
+    // a lava lamp in a glass ball: soft wax lit from below, rising, necking, sinking; bubbles drifting up
+    id: 'lava', label: 'Lava Lamp', hint: 'Soft wax rising and sinking in a glass ball; touch to warm it, tap for bubbles', group: 'glass', sessionSafe: true,
+    swatch: 'radial-gradient(circle at 45% 60%,#ffd25a,#ff7a14 30%,#c22a06 55%,#3a1606 85%)',
+    gen: { ...NONE, lava: 1, matte: 1 },
+    physics: { rippleK: 6, rippleSpeed: 0.2, rippleDecay: 2, rippleAmp: 0.003, jelly: 0.05, fluid: 0 },
+    sound: {
+      // a warm, low liquid hum
+      bed: [
+        { kind: 'tones', wave: 'sine', freqs: [155.56, 156.2, 233.08], levels: [1, 1, 0.25], filter: { type: 'lowpass', freq: 400 }, gain: 0.014, swell: { rate: 0.03, depth: 0.3 } },
+        { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 320 }, gain: 0.016, lfo: { target: 'gain', rate: 0.04, depth: 0.005 } },
+      ],
+      // touching: a soft movement of warm water
+      event: { voice: 'swell', color: 'brown', dur: [0.8, 1.2], sweep: [150, 420, 160], amp: 0.035 },
+      rate: 0.0001,
+      cues: {
+        // blobs meeting or pinching apart: a very soft, slow bloop
+        merge: { voice: 'gloop', range: [150, 200], rise: 1.4, dur: [0.5, 0.6], count: [1, 1], squelch: 0.4, amp: 0.045 },
+        // a bubble reaching the surface: tiny and soft
+        blup: { voice: 'gloop', range: [380, 560], rise: 1.3, dur: [0.07, 0.09], count: [1, 1], squelch: 0.15, amp: 0.02 },
+      },
     },
   },
   {
@@ -232,10 +257,13 @@ export const MATERIALS: MaterialPreset[] = [
     gen: { ...NONE, ferro: 1 },
     physics: { rippleK: 10, rippleSpeed: 0.35, rippleDecay: 2.2, rippleAmp: 0.004, jelly: 0.05, fluid: 0, spring: 30 },
     sound: {
-      // a quiet resonance; spikes shifting are soft, dry ticks
-      bed: [{ kind: 'tones', wave: 'sine', freqs: [164.81, 246.94], levels: [1, 0.3], filter: { type: 'lowpass', freq: 400 }, gain: 0.025, swell: { rate: 0.04, depth: 0.3 } }],
-      event: { voice: 'crackle', ticks: [5, 2], spread: 0.25, band: [250, 600], settle: 0.04, amp: 0.02 },
-      rate: 0.18,
+      // thick, warm and slow, like glue or lava: a low simmer, and now and then a fat bubble opening
+      bed: [
+        { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 260 }, gain: 0.03, lfo: { target: 'gain', rate: 0.05, depth: 0.01 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 200, q: 1.2 }, gain: 0.01, lfo: { target: 'freq', rate: 0.04, depth: 50 } },
+      ],
+      event: { voice: 'gloop', range: [160, 250], rise: 1.9, dur: [0.42, 0.5], count: [2, 1], squelch: 0.7, amp: 0.07 },
+      rate: 0.3,
     },
   },
   {
@@ -318,13 +346,17 @@ export const MATERIALS: MaterialPreset[] = [
     },
   },
   {
-    id: 'mushroom', label: 'Mushroom', hint: 'Colour moving slowly through gills and veins', group: 'organic', sessionSafe: true,
-    swatch: 'linear-gradient(135deg,#0a2a44,#2bb3cf,#ff7a2e)',
+    // a 60s/70s psychedelic mushroom: liquid colour flowing over the cap, waves rippling out from its centre
+    id: 'mushroom', label: 'Mushroom', hint: 'A psychedelic mushroom: liquid colour flowing slowly over cap and gills', group: 'organic', sessionSafe: true,
+    swatch: 'linear-gradient(135deg,#ff3fb4,#ff8a1e 30%,#b8f43a 55%,#8a3dff 78%,#2fe0d0)',
     gen: { ...NONE, gill: 1 },
     physics: { rippleK: 10, rippleSpeed: 0.35, rippleDecay: 1.8, rippleAmp: 0.006, jelly: 0.2, fluid: 0 },
     sound: {
-      // near-silence: a faint rustle now and then
-      bed: [{ kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 450, q: 0.6 }, gain: 0.004 }],
+      // dreamy: two tones a breath apart, beating slowly, and a faint rustle now and then
+      bed: [
+        { kind: 'tones', wave: 'sine', freqs: [196, 197.4, 293.66], levels: [1, 1, 0.3], filter: { type: 'lowpass', freq: 600 }, gain: 0.018, swell: { rate: 0.04, depth: 0.4 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 450, q: 0.6 }, gain: 0.004 },
+      ],
       event: { voice: 'hiss', band: [300, 600], dur: [0.35, 0.6], amp: 0.014 },
       rate: 0.08,
     },
@@ -345,34 +377,21 @@ export const MATERIALS: MaterialPreset[] = [
     },
   },
   {
-    // light diffused through frosted glass: nothing in the air, only a soft glow with depth
-    id: 'aura', label: 'Soft Light', hint: 'Light held in frosted glass', group: 'atmosphere', sessionSafe: true,
-    swatch: 'radial-gradient(circle at 45% 40%,#fff6e6,#e9c9d6 45%,#8fa3d8)',
-    gen: { ...NONE, aura: 1, matte: 1 },
-    physics: { rippleK: 8, rippleSpeed: 0.3, rippleDecay: 1.6, rippleAmp: 0.008, jelly: 0.1, fluid: 0 },
-    sound: {
-      bed: [
-        { kind: 'tones', wave: 'sine', freqs: [196, 261.63, 392], levels: [1, 0.6, 0.2], filter: { type: 'lowpass', freq: 600 }, gain: 0.026, swell: { rate: 0.03, depth: 0.35 } },
-        { kind: 'noise', color: 'pink', filter: { type: 'lowpass', freq: 600, q: 0.4 }, gain: 0.016, lfo: { target: 'gain', rate: 0.05, depth: 0.008 } },
-      ],
-      event: { voice: 'swell', color: 'pink', dur: [1.6, 2.8], sweep: [200, 600, 190], amp: 0.04 },
-      rate: 0.06,
-    },
-  },
-  {
-    // daytime sky held in the ball: cumulus drifting through blue, lit from above
-    id: 'sky', label: 'Sky', hint: 'Clouds drifting through a summer sky', group: 'atmosphere', sessionSafe: true,
-    swatch: 'linear-gradient(160deg,#1f78d6,#6cc1f2 50%,#ffffff 80%)',
+    // looking up on a fine day: real scattering, the sun where it is now, cumulus building and dissolving
+    id: 'sky', label: 'Sky', hint: 'The sky above you right now, clouds drifting; touch and a breeze curls the wisps', group: 'atmosphere', sessionSafe: true,
+    swatch: 'linear-gradient(170deg,#2b6fd1,#7db8ea 55%,#f4f1ea 80%)',
     gen: { ...NONE, sky: 1, matte: 1 },
-    physics: { rippleK: 6, rippleSpeed: 0.25, rippleDecay: 1.4, rippleAmp: 0.006, jelly: 0.08, fluid: 0.1 },
+    physics: { rippleK: 6, rippleSpeed: 0.25, rippleDecay: 1.4, rippleAmp: 0.004, jelly: 0.06, fluid: 0.08 },
     sound: {
-      // a breeze, and a faint harmonic now and then
+      // open air: a soft, high breeze; a touch is a breath of wind
       bed: [
-        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 450, q: 0.7 }, gain: 0.018, lfo: { target: 'freq', rate: 0.05, depth: 150 } },
-        { kind: 'tones', wave: 'sine', freqs: [392, 587.33], levels: [0.6, 0.3], filter: { type: 'lowpass', freq: 700 }, gain: 0.006, swell: { rate: 0.025, depth: 0.6 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 1400, q: 0.5 }, gain: 0.006, lfo: { target: 'gain', rate: 0.04, depth: 0.003 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 500, q: 0.7 }, gain: 0.008, lfo: { target: 'freq', rate: 0.03, depth: 120 } },
       ],
-      event: { voice: 'swell', color: 'pink', dur: [2, 3.5], sweep: [200, 600, 190], amp: 0.03 },
-      rate: 0.05,
+      event: { voice: 'swell', color: 'pink', dur: [1.4, 2.4], sweep: [300, 1600, 280], amp: 0.03 },
+      rate: 0.03,
+      // birdsong comes from the scene, in daylight only
+      cues: { bird: { voice: 'chirp', range: [2200, 3400], count: [4, 3], amp: 0.006 } },
     },
   },
   {
@@ -389,21 +408,21 @@ export const MATERIALS: MaterialPreset[] = [
     },
   },
   {
-    // a quiet street at night: the orb is the lamp's warm halo, snow falling through it
-    id: 'snow', label: 'Lamplight Snow', hint: 'Windblown snow under an old street lamp; touch stirs the air', group: 'atmosphere', sessionSafe: true,
-    swatch: 'radial-gradient(circle,#fff1dc,#e8b27c 30%,#1a2238 70%,#05070d)',
+    // a calm snowstorm at night: a street running away under warm lamps into fog, fine glittering powder in slow curtains
+    id: 'snow', label: 'Snowstorm', hint: 'A calm snowstorm down a lamplit street; touch and the flakes swirl round your finger', group: 'atmosphere', sessionSafe: true,
+    swatch: 'radial-gradient(circle at 50% 42%,#ffe6c2,#c98d55 16%,#2a2a36 48%,#07080d)',
     gen: { ...NONE, snow: 1, matte: 1 },
     physics: { rippleK: 1, rippleSpeed: 0.1, rippleDecay: 3, rippleAmp: 0, jelly: 0, fluid: 0 },
     sound: {
-      // a windy night, still muffled by the snow: low gusts, the hush, the lamp's faint hum
+      // muffled by the snow: a low hush, the powder's soft hiss, and the wind swelling with each gust
       bed: [
-        { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 400, q: 0.3 }, gain: 0.03, lfo: { target: 'gain', rate: 0.04, depth: 0.01 } },
-        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 340, q: 0.9 }, gain: 0.022, lfo: { target: 'gain', rate: 0.07, depth: 0.016 } },
-        { kind: 'tones', wave: 'sine', freqs: [150, 300], levels: [1, 0.25], filter: { type: 'lowpass', freq: 350 }, gain: 0.004 },
+        { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 420, q: 0.3 }, gain: 0.028 },
+        { kind: 'noise', color: 'pink', filter: { type: 'lowpass', freq: 600, q: 0.3 }, gain: 0.01 },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 320, q: 0.8 }, gain: 0.03, lfo: { target: 'freq', rate: 0.03, depth: 80 }, follow: 'wind' },
       ],
-      // a soft, muffled crunch
-      event: { voice: 'grains', count: [7, 3], spread: 0.18, band: [200, 600], q: 0.8, dur: [0.012, 0.035], amp: 0.016 },
-      rate: 0.02,
+      // the glints: a very faint glassy shimmer
+      event: { voice: 'sparkle', notes: [587.33, 659.25, 783.99, 880, 1046.5], count: [3, 2], gap: 0.09, decay: 0.6, amp: 0.006 },
+      rate: 0.12,
     },
   },
   {
@@ -434,7 +453,26 @@ export const MATERIALS: MaterialPreset[] = [
       rate: 6,
     },
   },
+  {
+    // play mode only: popping is all sharp little onsets, never for a session
+    id: 'wrap', label: 'Bubble Wrap', hint: 'Pop the bubbles: tap one, or run your finger across; they slowly fill again', group: 'play', sessionSafe: false,
+    swatch: 'radial-gradient(circle at 35% 30%,#ffffff,#d8ecff 30%,#9cc4ec 65%,#5e86b8)',
+    gen: { ...NONE, wrap: 1 },
+    physics: { rippleK: 26, rippleSpeed: 0.9, rippleDecay: 3.5, rippleAmp: 0.008, jelly: 0.04, fluid: 0 },
+    sound: {
+      // the room, almost nothing: pops and refills are triggered by the scene
+      bed: [{ kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 500, q: 0.8 }, gain: 0.002 }],
+      event: { voice: 'snap', body: [380, 620], amp: 0.11 },
+      rate: 0.0001,
+      cues: {
+        pop: { voice: 'snap', body: [380, 620], amp: 0.11 },
+        // a bubble filling again: an almost inaudible "fff" of air
+        refill: { voice: 'swell', color: 'pink', dur: [0.7, 0.9], sweep: [1500, 3200, 1600], amp: 0.004 },
+      },
+    },
+  },
 ];
+
 
 export const MATERIAL_BY_ID = Object.fromEntries(MATERIALS.map((m) => [m.id, m])) as Record<MaterialId, MaterialPreset>;
 

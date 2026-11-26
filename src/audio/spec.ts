@@ -24,9 +24,12 @@ export interface LfoSpec {
   depth: number; // Hz for freq, linear gain for gain
 }
 
+/** a live value the scene sends to the audio engine (0..1), e.g. how hard the wind is blowing now */
+export type DriveId = 'wind';
+
 /** One continuous layer of a material's bed. */
 export type BedLayer =
-  | { kind: 'noise'; color: NoiseColor; filter: FilterSpec; gain: number; lfo?: LfoSpec }
+  | { kind: 'noise'; color: NoiseColor; filter: FilterSpec; gain: number; lfo?: LfoSpec; /** its level follows a live value from the scene */ follow?: DriveId }
   | {
       kind: 'tones';
       wave: OscillatorType;
@@ -64,14 +67,25 @@ export type VoiceSpec =
   | { voice: 'drop'; range: [number, number]; chirp: number; decay: number; amp: number; echo: number }
   /** a soft sift of bandpassed noise (organic rustles) */
   | { voice: 'hiss'; band: [number, number]; dur: Pair; amp: number }
-  /** fracture ticks (tiny bright clicks) followed by a low settling (Ice) */
   /** fairy glitter: a quick run of tiny bell notes, falling away, with a breath of shimmer (Starfall) */
   | { voice: 'sparkle'; notes: number[]; count: Pair; gap: number; decay: number; amp: number }
-  | { voice: 'crackle'; ticks: Pair; spread: number; band: [number, number]; settle: number; amp: number; /** filter width: low = broad, hard cracks (default 3, narrow ticks) */ q?: number };
+  /** fracture ticks (tiny bright clicks) followed by a low settling (Ice) */
+  | { voice: 'crackle'; ticks: Pair; spread: number; band: [number, number]; settle: number; amp: number; /** filter width: low = broad, hard cracks (default 3, narrow ticks) */ q?: number; /** seconds between ticks (default 0.008..0.03); even, slow spacing reads as a creak */ gap?: [number, number] }
+  /** bubble-wrap snap: a softened click, a small hollow body that drops in pitch, a crinkle after */
+  | { voice: 'snap'; body: [number, number]; amp: number }
+  /** a distant bird: a few quick whistled notes, each a short pitch sweep */
+  | { voice: 'chirp'; range: [number, number]; count: Pair; amp: number }
+  /** a thick, slow bubble (glue, lava, honey): a low tone that rises as it opens, with a wet squelch */
+  | { voice: 'gloop'; range: [number, number]; rise: number; dur: Pair; count: Pair; squelch: number; amp: number };
+
+/** named one-shots the scene asks for directly (honey: threads letting go, bubbles surfacing) */
+export type CueId = 'tack' | 'blup' | 'creak' | 'bird' | 'pop' | 'refill' | 'plip' | 'stir' | 'merge';
 
 export interface SoundSpec {
   bed: BedLayer[];
   event: VoiceSpec;
   /** average ambient events per second (session mode slows this further) */
   rate: number;
+  /** extra one-shots the scene triggers by name */
+  cues?: Partial<Record<CueId, VoiceSpec>>;
 }

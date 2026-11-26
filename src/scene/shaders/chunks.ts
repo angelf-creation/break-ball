@@ -44,6 +44,23 @@ float fbm(vec2 p){
 }
 `;
 
+/** Bubble Wrap lattice lookup, shared by the surface (domes) and the orb's shading. Needs nothing else. */
+export const WRAP = /* glsl */ `
+uniform float uWrap;       // Bubble Wrap
+uniform sampler2D uWrapMap; // equirect: which bubble is nearest (R = index low byte, G = high byte)
+uniform sampler2D uWrapTex; // per bubble: xyz = centre, w = how inflated (0 popped .. 1, a little over 1 in the squash)
+uniform vec2 uWrapN;        // x = number of bubbles, y = bubble radius (radians)
+// the bubble nearest to a direction on the ball, and how far from its centre (1 = its edge)
+vec4 wrapBubble(vec3 d, out float rr){
+  vec2 uv = vec2(atan(d.z, d.x) / 6.2831853 + 0.5, acos(clamp(d.y, -1.0, 1.0)) / 3.14159265);
+  vec4 m = texture2D(uWrapMap, uv);
+  float idx = floor(m.r * 255.0 + 0.5) + floor(m.g * 255.0 + 0.5) * 256.0;
+  vec4 b = texture2D(uWrapTex, vec2((idx + 0.5) / uWrapN.x, 0.5));
+  rr = acos(clamp(dot(d, b.xyz), -1.0, 1.0)) / uWrapN.y;
+  return b;
+}
+`;
+
 /**
  * Orb surface: a unit-direction sphere displaced along its normal.
  * `dir` is always a unit vector in object space; +z faces the camera.
@@ -71,7 +88,11 @@ uniform float uSonicAmt;   // how readily this material answers
 uniform vec4 uDent;        // pillow: xyz = where it is pressed, w = how deep
 uniform float uFerro;      // ferrofluid: how far the spikes are raised (weight * field)
 uniform vec4 uFerroField;  // xyz = where the magnet is (object space), w = how focused it is
-uniform sampler2D uFerroTex; // equirect: R = distance to the nearest spike / spacing, G = its size
+uniform sampler2D uFerroTex; // equirect: R = distance to the nearest spike / spacing, G = its size, B = distance to the ridge line, A = its phase
+uniform vec4 uPull;       // Liquid Gold: xyz = where a thread is pulled from (object space), w = how hard
+${WRAP}
+uniform float uWobble;     // soap bubble: the slow breathing jiggle of a floating film
+uniform vec3 uFerroMotion;  // x = 0 broad merged humps .. 1 sharp spikes, y = the spikes' own sway clock, z = how much they sway
 
 // Turrell's window: everything within this angle of the viewer is cut flat.
 // cos(37 deg): the window spans 60 % of the ball's radius on screen.
@@ -144,8 +165,18 @@ float ferroHeight(vec3 dir){
   float d = clamp(t.r, 0.0, 1.0);
   float near = pow(max(dot(dir, uFerroField.xyz), 0.0), 3.0);
   float amp = mix(1.0, 0.3 + 1.25 * near, uFerroField.w) * (0.75 + 0.5 * t.g);
+  // after the reference video: each spike rises and sinks on its own beat, neighbours out of step,
+  // so the crown keeps shifting; where neighbours are low together they merge into one ridge
+  float own = sin(uFerroMotion.y + t.a * 6.2831853);
+  float spikeAmp = amp * (1.0 + uFerroMotion.z * own);
   // concave flanks to a sharp tip; a shallow, smooth trough between neighbours
-  return uFerro * amp * (0.2 * pow(1.0 - d, 2.4) - 0.014);
+  float spike = 0.2 * pow(1.0 - d, 2.4);
+  // the first stage (and the low moments): broad humps whose bases run together along the ridge lines
+  // (the ridge is shared by both neighbours, so it must not use either one's own phase: no crease)
+  float ridge = (1.0 - smoothstep(0.0, 0.5, t.b)) * smoothstep(1.0, 0.45, d) * 0.03 * (1.0 - 0.75 * uFerroMotion.x);
+  float hump = 0.055 * smoothstep(1.0, 0.1, d);
+  float sharp = clamp(uFerroMotion.x * (0.8 + 0.35 * own), 0.0, 1.0);
+  return uFerro * (spikeAmp * mix(hump, spike, sharp) + amp * ridge - 0.014 * amp);
 }
 
 // Radial displacement as a fraction of the radius.
@@ -162,6 +193,24 @@ float orbDisp(vec3 dir){
     float w1 = sin(th * (12.0 + 12.0 * uSonic.z) - uSonicT);
     float w2 = cos(az * 6.0) * sin(th * 9.0) * sin(uSonicT * 0.6);
     h += uSonicAmt * uSonic.x * 0.0065 * (mix(w1, w1 * 0.6 + w2, uSonic.z)) * smoothstep(0.05, 0.4, th);
+  }
+  // Bubble Wrap: each bubble a low dome, flattened once popped
+  if (uWrap > 0.002){
+    float rr;
+    vec4 b = wrapBubble(dir, rr);
+    h += uWrap * 0.03 * clamp(b.w, 0.0, 1.2) * sqrt(max(1.0 - rr * rr, 0.0));
+  }
+  // Liquid Gold: the surface is drawn up toward a thread being pulled out of it
+  if (uPull.w > 0.002){
+    float an = acos(clamp(dot(dir, uPull.xyz), -1.0, 1.0));
+    h += uPull.w * 0.07 * exp(-an * an / 0.035);
+  }
+  // soap bubble: a floating bubble is never still; a few low, slow modes of jiggle
+  if (uWobble > 0.002){
+    float tw = uTime;
+    h += uWobble * (0.012 * sin(tw * 0.9) * (1.5 * dir.y * dir.y - 0.5)
+                  + 0.008 * sin(tw * 1.27 + 1.3) * dir.x * dir.z * 2.0
+                  + 0.006 * sin(tw * 0.71 + 2.1) * (dir.x * dir.x - dir.z * dir.z));
   }
   // water: slow large-scale sloshing
   // slow, large, smooth swells (liquid chrome moves slowly and stays a ball)
@@ -247,10 +296,40 @@ uniform vec3 uBleed;    // colour of the light the orb spills into the field
 uniform float uBleedAmt;
 uniform float uStudio;   // Pashgian: a soft studio sweep with a coloured cast shadow
 uniform vec4 uAura;       // light moving around the ball: xy = its offset, z = strength, w = held breath 0..1
-uniform vec2 uSnowWind;   // Lamplight Snow: x = how far the wind has carried the snow, y = gust now
-uniform vec2 uNight;      // night backdrop: x = how much, y = 0 snowy street .. 1 clear starry sky
+uniform vec2 uSnowWind;   // Snowstorm: x = how far the wind has carried the snow, y = its slant now (signed)
+uniform vec4 uSwirl;      // Snowstorm: xy = where the finger stirred the air (orb radii), z = strength
 uniform vec4 uMeteor;     // falling star: xy = start (orb radii, screen-aligned), z = heading, w = progress 0..1
 uniform vec4 uMeteorB;    // x = path length, y = brightness, z = on
+uniform vec4 uSceneArt;   // artist over the scene materials: y = Turrell's light wash, z = how much
+uniform vec4 uThreadA;    // Liquid Gold thread: xy = where it leaves the honey, zw = its free end (orb radii, screen-aligned)
+uniform vec4 uThreadB;    // x = thickness, y = how far it sags, z = how much there is of it
+
+// Liquid Gold: a sticky thread pulled out of the honey, in orb radii around the orb's centre:
+// a sagging curve from the honey to the finger, thinning in the middle as it stretches.
+vec4 honeyThread(vec2 o){
+  if (uThreadB.z < 0.002) return vec4(0.0);
+  vec2 A = uThreadA.xy, E = uThreadA.zw;
+  vec2 M = (A + E) * 0.5 - vec2(0.0, uThreadB.y);
+  float best = 1e3, bt = 0.0;
+  vec2 prev = A;
+  for (int i = 1; i <= 14; i++){
+    float t = float(i) / 14.0;
+    vec2 q = mix(mix(A, M, t), mix(M, E, t), t);
+    vec2 ab = q - prev, ap = o - prev;
+    float h = clamp(dot(ap, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+    float dd = length(ap - ab * h);
+    if (dd < best){ best = dd; bt = t - (1.0 - h) / 14.0; }
+    prev = q;
+  }
+  float w = uThreadB.x * (1.0 - 0.6 * sin(3.14159265 * bt)) * (1.0 + 0.8 * smoothstep(0.25, 0.0, bt)) + 0.003; // wide where it leaves the honey
+  float aa = fwidth(o.x) * 1.2;
+  float cov = 1.0 - smoothstep(w - aa, w + aa, best);
+  float core = clamp(1.0 - best / w, 0.0, 1.0);
+  // translucent amber: deeper at its edges, lit through along its middle, one thin glint
+  vec3 c = vec3(0.75, 0.32, 0.03) * (0.25 + 0.75 * core) + vec3(1.0, 0.72, 0.25) * smoothstep(0.5, 0.95, core) * 0.45;
+  c += vec3(1.0, 0.92, 0.75) * smoothstep(0.88, 1.0, core) * 0.25;
+  return vec4(c, cov * uThreadB.z * (0.75 + 0.25 * core));
+}
 
 // A falling star, in orb radii around the orb's centre: a thin bright head and a short
 // tail that fades, brightening then dying away over its flight.
@@ -270,86 +349,22 @@ float meteor(vec2 q){
   return (core * inTail * inTail + headGlow) * fade * uMeteorB.y;
 }
 
-// The night: a snowy street (deep blue-black, a cold haze low down) or a clear sky
-// (indigo to black, a faint glow at the horizon), with the lamp's warm spill or faint stars.
-vec3 nightColor(vec2 uv){
-  vec2 o = (uv - uCenter) * vec2(uAspect, 1.0) / max(uOrbR, 1e-3);
-  float y = uv.y;
-  // an old street on a winter night: low snowy sky, dark gabled houses with a few lit
-  // windows, snow on the roofs and the ground, the lamp post and the pool of its light
-  vec3 lampC = vec3(1.0, 0.68, 0.26);
-  // a low snowy sky holds a little light near the rooftops, so the houses stand out against it
-  vec3 street = mix(vec3(0.013, 0.012, 0.015), vec3(0.0012, 0.0013, 0.0024), smoothstep(0.12, 0.8, y));
-  float gx = uv.x * uAspect;
-  float groundY = 0.13 + 0.008 * snoise(vec2(gx * 3.0, 2.0));
-  float bx = gx * 4.2, bi = floor(bx), bf = fract(bx);
-  float bh = 0.2 + 0.16 * hash12(vec2(bi, 3.0));
-  float gable = step(0.45, hash12(vec2(bi, 9.0))) * 0.07 * (1.0 - abs(bf - 0.5) * 2.0);
-  float roof = groundY + bh + gable;
-  float inB = step(y, roof) * step(groundY, y);
-  vec3 house = vec3(0.0006, 0.0006, 0.0009);
-  vec2 wq = vec2(bx * 3.0, (y - groundY) * 24.0);
-  vec2 wc = floor(wq), wf = fract(wq);
-  float win = step(0.88, hash12(wc + bi * 7.0)) * step(0.28, wf.x) * step(wf.x, 0.72) * step(0.3, wf.y) * step(wf.y, 0.8) * step(y, roof - 0.04) * step(groundY + 0.03, y);
-  house += vec3(1.0, 0.6, 0.22) * win * (0.03 + 0.015 * sin(uFieldTime * 0.3 + bi));
-  street = mix(street, house, inB);
-  street += vec3(0.035, 0.038, 0.05) * smoothstep(0.005, 0.0, abs(y - roof)) * step(groundY, y);   // snow along the roofs
-  // the lamp: its light spills into the air, onto the snow below, and down the post
-  float od = length(o);
-  street += lampC * (0.045 * exp(-max(od - 0.8, 0.0) * 2.4) + 0.006 * exp(-max(od - 0.8, 0.0) * 0.6));
-  float px = (uv.x - uCenter.x) * uAspect;
-  float pool = exp(-px * px / sq(uOrbR * 1.6));
-  vec3 ground = vec3(0.006, 0.0075, 0.012) + lampC * 0.09 * pool;
-  ground *= 0.9 + 0.1 * snoise(vec2(gx * 40.0, y * 90.0));
-  street = mix(street, ground, step(y, groundY));
-  float postTop = uCenter.y - uOrbR * 0.92;
-  float post = step(abs(px), uOrbR * 0.03) * step(groundY - 0.01, y) * step(y, postTop);
-  vec3 postC = vec3(0.0015) + lampC * 0.06 * exp(-(postTop - y) / max(uOrbR * 0.5, 1e-3)) * smoothstep(-uOrbR * 0.03, uOrbR * 0.03, px);
-  street = mix(street, postC, post);
-  // windblown snow across the whole street, faint except near the lamp
-  vec2 sp2 = vec2(gx, y) * 22.0;
-  sp2.y += uFieldTime * 1.6;
-  sp2.x -= uSnowWind.x * 22.0 * 0.8 + sp2.y * 0.25 * (0.4 + uSnowWind.y);
-  vec2 sc2 = floor(sp2);
-  vec2 sf2 = fract(sp2) - 0.5 - 0.6 * (hash22(sc2 + 4.0) - 0.5);
-  float fl2 = step(0.8, hash12(sc2 + 21.0)) * exp(-dot(sf2, sf2) * 140.0);
-  float nearLamp = exp(-max(od - 1.0, 0.0) * 1.5);
-  street += mix(vec3(0.06, 0.065, 0.08), lampC, nearLamp) * fl2 * (0.04 + 0.3 * nearLamp);
-  // a clear winter night: near-black navy, a violet glow at the horizon, a dense field of
-  // tiny blue-white stars, and a dark treeline of firs and bare trees along the bottom
-  vec3 sky = mix(vec3(0.02, 0.011, 0.033), vec3(0.002, 0.0025, 0.009), smoothstep(0.05, 0.7, y));
-  float tx = uv.x * uAspect;
-  for (int k = 0; k < 2; k++){
-    float K = k == 0 ? 260.0 : 110.0;
-    vec2 sp = uv * vec2(uAspect, 1.0) * K;
-    vec2 cell = floor(sp);
-    vec2 fp = fract(sp) - 0.5 - 0.6 * (hash22(cell + float(k) * 3.0) - 0.5);
-    float h = hash12(cell + 11.0 + float(k) * 7.0);
-    float st = step(k == 0 ? 0.8 : 0.93, h) * exp(-dot(fp, fp) * (k == 0 ? 60.0 : 30.0)) * (0.3 + 0.7 * fract(h * 37.0));
-    st *= 0.72 + 0.28 * sin(uFieldTime * (0.4 + fract(h * 13.0)) + h * 60.0);
-    float tc = fract(h * 5.0);
-    vec3 tint = tc < 0.7 ? vec3(0.72, 0.82, 1.0) : tc < 0.94 ? vec3(1.0) : vec3(1.0, 0.75, 0.5);
-    sky += tint * st * (k == 0 ? 0.22 : 0.55) * smoothstep(0.08, 0.3, y);
+
+// The active artist over a full scene (Snowstorm, Starfall, Sky, Ink): the light keeps its
+// shape, but takes on the artist's palette; for Turrell, a soft colour-field wash drifts over
+// everything and the lamps' and stars' light bleeds out into the field.
+vec3 artistGrade(vec3 c, vec2 o, float amt){
+  if (amt < 0.002) return c;
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  vec3 pal = palette(0.15 + sqrt(max(l, 0.0)) * 1.1) * (l * 1.4 + 0.012);
+  vec3 g = mix(c, pal, 0.55);
+  if (uSceneArt.y > 0.002){
+    float t = uFieldTime * 0.008;
+    vec3 field = palette(t + 0.12 * o.y + 0.15 * snoise(o * 0.25 + vec2(t, -t)));
+    vec3 wash = field * (0.035 + 0.5 * l) + field * smoothstep(0.01, 0.3, l) * 0.25;
+    g = mix(g, g * 0.35 + wash, uSceneArt.y * 0.8);
   }
-  // the treeline: firs of different heights, their sides built of drooping tiers of
-  // branches, over a low, uneven line of bare trees
-  float trees = 0.0;
-  float fw = 0.07, fc0 = floor(tx / fw);
-  for (int j = -1; j <= 1; j++){
-    float fi = fc0 + float(j);
-    if (hash12(vec2(fi, 5.0)) < 0.3) continue;
-    float cx = (fi + 0.3 + 0.4 * hash12(vec2(fi, 2.0))) * fw;
-    float base = 0.09, top = base + 0.06 + 0.12 * hash12(vec2(fi, 8.0));
-    float t = clamp((top - y) / (top - base + 0.02), 0.0, 1.0);          // 0 at the tip, 1 at the foot
-    float tiers = 0.75 + 0.25 * fract(t * (5.0 + 3.0 * hash12(vec2(fi, 4.0))));
-    float half_ = t * fw * 0.42 * tiers + 0.0015;
-    trees = max(trees, step(abs(tx - cx), half_) * step(y, top));
-  }
-  float bare = 0.085 + 0.035 * (0.5 + 0.5 * snoise(vec2(tx * 3.0, 1.3))) + 0.012 * snoise(vec2(tx * 26.0, 4.0)) + 0.006 * snoise(vec2(tx * 70.0, 9.0));
-  trees = max(trees, step(y, bare));
-  sky = mix(sky, vec3(0.0006, 0.0005, 0.0012), trees);
-  sky += vec3(0.95, 0.97, 1.0) * meteor(o);
-  return mix(street, sky, uNight.y);
+  return mix(c, g, amt);
 }
 
 float fieldBlob(vec2 q, vec2 c, float s){
@@ -400,7 +415,10 @@ vec3 fieldColor(vec2 uv){
     st += mix(uPal2, uPal3, 0.4) * exp(-dot(kq, kq) * 1.4) * 0.45; // light gathered through the glass
     c = mix(c, st, uStudio);
   }
-  if (uNight.x > 0.001) c = mix(c, nightColor(uv), uNight.x);
+  if (uThreadB.z > 0.002){
+    vec4 hth = honeyThread((uv - uCenter) * vec2(uAspect, 1.0) / max(uOrbR, 1e-3));
+    c = mix(c, hth.rgb, hth.a);
+  }
   return c;
 }
 `;

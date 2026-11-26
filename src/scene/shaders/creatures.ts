@@ -157,6 +157,15 @@ vec3 hueTurn(vec3 c, float a){
   float l0 = dot(c, vec3(0.2126, 0.7152, 0.0722)), l1 = dot(o, vec3(0.2126, 0.7152, 0.0722));
   return o * clamp(l0 / max(l1, 1e-3), 0.4, 1.8);
 }
+// psychedelic palette, cycling smoothly: magenta, orange, lime, turquoise, violet
+vec3 psyCol(float x){
+  x = fract(x) * 5.0;
+  float i = floor(x), f = smoothstep(0.0, 1.0, fract(x));
+  vec3 c0 = vec3(1.0, 0.08, 0.6), c1 = vec3(1.0, 0.42, 0.04), c2 = vec3(0.5, 0.95, 0.08), c3 = vec3(0.06, 0.85, 0.8), c4 = vec3(0.48, 0.12, 1.0);
+  vec3 a = i < 1.0 ? c0 : i < 2.0 ? c1 : i < 3.0 ? c2 : i < 4.0 ? c3 : c4;
+  vec3 b = i < 1.0 ? c1 : i < 2.0 ? c2 : i < 3.0 ? c3 : i < 4.0 ? c4 : c0;
+  return mix(a, b, f);
+}
 float plum(vec2 uv){ vec3 c = texture2D(uPhoto, uv).rgb; return dot(c, vec3(0.3, 0.55, 0.15)); }
 void main(){
   vec2 uv = uCrop.xy + vUv2 * uCrop.zw;
@@ -186,24 +195,30 @@ void main(){
     // gentle light from inside: heart, veins and rims
     col += c * (exp(-dot(vObjP.xy, vObjP.xy) * 9.0) * 0.35 + smoothstep(0.02, 0.12, length(g)) * 0.25) * (0.8 + 0.2 * sin(t * 0.5));
   } else if (uScene < 1.5){
-    // mushroom: colour moving slowly up the gills and veins, from the foot to the rim
-    vec2 foot = vec2(0.02, -0.86);
-    vec2 dv = vObjP.xy - foot;
-    float along = length(dv), fan = atan(dv.x, dv.y);
-    float warp = 0.5 * snoise(vObjP.xy * 1.5 + vec2(0.0, -t * 0.03));
-    float ph = along * 2.3 - t * 0.2 + warp + 0.35 * sin(fan * 4.0 + t * 0.07);
-    // sea-green, blue, violet, rose and a little amber: soft neighbours, never a full rainbow at once
-    vec3 hueC = vec3(0.5) + vec3(0.42, 0.34, 0.4) * cos(6.2831853 * (vec3(ph * 0.22) + vec3(0.02, 0.36, 0.62)));
+    // mushroom, 60s/70s psychedelic: saturated colour flowing over cap and gills like liquid,
+    // soft concentric waves rippling out from the cap's centre, and a slow breathing glow.
+    // Never strobing: a full turn of the colours takes about twenty seconds. Comfort / reduced
+    // motion (uReduced) slows it further and holds the saturation back.
+    float sat = mix(1.0, 0.55, uReduced);
     float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    float vein = smoothstep(0.015, 0.1, length(g)) * 0.6 + smoothstep(0.12, 0.5, l0) * 0.6;
-    vec3 dyed = hueC * (l / max(dot(hueC, vec3(0.2126, 0.7152, 0.0722)), 0.08));
-    // the tan stems and the orange rims keep their own warmth
-    float warm = smoothstep(0.0, 0.12, c.r - c.b);
-    float amt = (0.34 + 0.4 * clamp(vein, 0.0, 1.0)) * (1.0 - 0.75 * warm) * smoothstep(0.1, 0.5, along);
-    col = mix(col, dyed, amt);
-    // a slow glow travelling inside the veins
-    float run = sq(0.5 + 0.5 * sin(along * 7.0 - t * 0.75 + fan * 2.0 + warp * 3.0));
-    col += hueC * l * run * clamp(vein, 0.0, 1.0) * 0.55 * (1.0 - 0.6 * warm);
+    vec2 dc = (vObjP.xy - vec2(0.0, 0.22)) * vec2(1.0, 1.7);           // the cap is wider than it is tall
+    float rc = length(dc);
+    vec2 fq = vObjP.xy * 1.2;
+    vec2 fw = vec2(snoise(fq + vec2(t * 0.03, 0.0)), snoise(fq + vec2(4.3, -t * 0.026)));
+    float flowv = snoise(fq * 1.3 + fw * 0.9 + vec2(-t * 0.018, t * 0.022));
+    float ph = rc * 1.5 - t * 0.05 + 0.3 * flowv + 0.12 * fw.x;
+    vec3 hueC = psyCol(ph);
+    float vein = clamp(smoothstep(0.015, 0.1, length(g)) * 0.6 + smoothstep(0.12, 0.5, l0) * 0.6, 0.0, 1.0);
+    vec3 dyed = hueC * (max(l, 0.02) / max(dot(hueC, vec3(0.2126, 0.7152, 0.0722)), 0.08)) * 1.25;
+    float onStem = smoothstep(0.1, 0.0, vObjP.y + 0.15) * smoothstep(0.35, 0.12, abs(vObjP.x));
+    col = mix(col, dyed, 0.86 - 0.25 * onStem);
+    // the waves: thin brighter rings travelling outward, and a second colour sliding along the gills
+    float ring = sq(0.5 + 0.5 * sin(rc * 13.0 - t * 0.45 + flowv * 1.5));
+    col += psyCol(ph + 0.4) * l * ring * (0.35 + 0.4 * vein);
+    // breathing glow, strongest in the bright parts of the photograph
+    float breathe = 0.5 + 0.5 * sin(t * 0.22);
+    col += hueC * (0.05 + 0.25 * l) * (0.4 + 0.6 * breathe) * smoothstep(0.08, 0.4, l0);
+    col = mix(vec3(dot(col, vec3(0.2126, 0.7152, 0.0722))), col, sat);
   } else {
     // medusa: clean black water; light gathers in the lace and the edge of the bell
     col = max(col - 0.004, 0.0) * 1.04;

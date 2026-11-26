@@ -17,6 +17,8 @@ export function SceneCanvas({ audio }: { audio?: AudioEngine }) {
           audio?.touch(m, intensity, pan);
         },
         onStar: (intensity, pan) => audio?.touch('starfall', intensity, pan),
+        onCue: (name, intensity, pan) => audio?.cue(store.get().material, name, intensity, pan),
+        onDrive: (name, value) => audio?.drive(name, value),
       });
     } catch (e) {
       console.error(e);
