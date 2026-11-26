@@ -69,6 +69,9 @@ uniform vec3 uSonic;       // sound: x energy, y low energy, z tone 0..1
 uniform float uSonicT;     // its own slow clock
 uniform float uSonicAmt;   // how readily this material answers
 uniform vec4 uDent;        // pillow: xyz = where it is pressed, w = how deep
+uniform float uFerro;      // ferrofluid: how far the spikes are raised (weight * field)
+uniform vec4 uFerroField;  // xyz = where the magnet is (object space), w = how focused it is
+uniform sampler2D uFerroTex; // equirect: R = distance to the nearest spike / spacing, G = its size
 
 // Turrell's window: everything within this angle of the viewer is cut flat.
 // cos(37 deg): the window spans 60 % of the ball's radius on screen.
@@ -132,6 +135,19 @@ float orbRipples(vec3 dir){
   return h * uRippleAmp;
 }
 
+// Ferrofluid (Rosensweig instability): the field lifts the liquid into a hexagonal lattice
+// of peaks; surface tension rounds the troughs between them. Spike centres are a Fibonacci
+// lattice baked into uFerroTex. The magnet (a touch) makes the nearest peaks taller.
+float ferroHeight(vec3 dir){
+  vec2 uv = vec2(atan(dir.z, dir.x) / 6.2831853 + 0.5, acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265);
+  vec4 t = texture2D(uFerroTex, uv);
+  float d = clamp(t.r, 0.0, 1.0);
+  float near = pow(max(dot(dir, uFerroField.xyz), 0.0), 3.0);
+  float amp = mix(1.0, 0.3 + 1.25 * near, uFerroField.w) * (0.75 + 0.5 * t.g);
+  // concave flanks to a sharp tip; a shallow, smooth trough between neighbours
+  return uFerro * amp * (0.2 * pow(1.0 - d, 2.4) - 0.014);
+}
+
 // Radial displacement as a fraction of the radius.
 float orbDisp(vec3 dir){
   float h = orbForm(dir) + orbRipples(dir);
@@ -155,7 +171,16 @@ float orbDisp(vec3 dir){
 }
 
 float orbR(){ return uRadius; }
-vec3 orbPos(vec3 dir){ return dir * orbR() * (1.0 + orbDisp(dir)); }
+vec3 orbPos(vec3 dir){
+  if (uFerro > 0.002){
+    // spikes lean toward the magnet, the taller the more
+    float fh = ferroHeight(dir);
+    vec3 m = uFerroField.xyz;
+    vec3 lean = (m - dir * dot(m, dir)) * uFerroField.w * 0.55 * max(fh, 0.0);
+    return (dir * (1.0 + orbDisp(dir) + fh) + lean) * orbR();
+  }
+  return dir * orbR() * (1.0 + orbDisp(dir));
+}
 vec3 orbNormal(vec3 dir){
   vec3 up = abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
   vec3 t1 = normalize(cross(up, dir));
@@ -222,6 +247,49 @@ uniform vec3 uBleed;    // colour of the light the orb spills into the field
 uniform float uBleedAmt;
 uniform float uStudio;   // Pashgian: a soft studio sweep with a coloured cast shadow
 uniform vec4 uAura;       // light moving around the ball: xy = its offset, z = strength, w = held breath 0..1
+uniform vec2 uNight;      // night backdrop: x = how much, y = 0 snowy street .. 1 clear starry sky
+uniform vec4 uMeteor;     // falling star: xy = start (orb radii, screen-aligned), z = heading, w = progress 0..1
+uniform vec4 uMeteorB;    // x = path length, y = brightness, z = on
+
+// A falling star, in orb radii around the orb's centre: a thin bright head and a short
+// tail that fades, brightening then dying away over its flight.
+float meteor(vec2 q){
+  if (uMeteorB.z < 0.5) return 0.0;
+  vec2 dir = vec2(cos(uMeteor.z), sin(uMeteor.z));
+  float pr = uMeteor.w;
+  vec2 head = uMeteor.xy + dir * uMeteorB.x * pr;
+  float tail = uMeteorB.x * (0.18 + 0.22 * pr);
+  vec2 v = q - head;
+  float along = -dot(v, dir);                 // 0 at the head, tail behind it
+  float perp = abs(dot(v, vec2(-dir.y, dir.x)));
+  float inTail = smoothstep(tail, 0.0, along) * step(-0.012, along);
+  float core = exp(-perp * perp / 0.00007) + 0.3 * exp(-perp * perp / 0.0008);
+  float headGlow = exp(-dot(v, v) / 0.0002) * 0.8;
+  float fade = smoothstep(0.0, 0.12, pr) * (1.0 - smoothstep(0.55, 1.0, pr));
+  return (core * inTail * inTail + headGlow) * fade * uMeteorB.y;
+}
+
+// The night: a snowy street (deep blue-black, a cold haze low down) or a clear sky
+// (indigo to black, a faint glow at the horizon), with the lamp's warm spill or faint stars.
+vec3 nightColor(vec2 uv){
+  vec2 o = (uv - uCenter) * vec2(uAspect, 1.0) / max(uOrbR, 1e-3);
+  float y = uv.y;
+  vec3 street = mix(vec3(0.006, 0.009, 0.018), vec3(0.0015, 0.002, 0.005), smoothstep(0.0, 0.9, y));
+  street += vec3(0.012, 0.017, 0.026) * smoothstep(0.35, 0.0, y) * (0.8 + 0.2 * snoise(vec2(uv.x * 3.0 + uFieldTime * 0.02, y * 2.0)));
+  float od = length(o);
+  street += vec3(1.0, 0.74, 0.5) * (0.05 * exp(-max(od - 0.8, 0.0) * 2.2) + 0.008 * exp(-max(od - 0.8, 0.0) * 0.6));
+  vec3 sky = mix(vec3(0.01, 0.011, 0.03), vec3(0.0015, 0.002, 0.007), smoothstep(0.0, 0.85, y));
+  sky += vec3(0.018, 0.015, 0.028) * smoothstep(0.3, 0.0, y);
+  vec2 sp = uv * vec2(uAspect, 1.0) * 140.0;
+  vec2 cell = floor(sp);
+  vec2 fp = fract(sp) - 0.5 - 0.6 * (hash22(cell) - 0.5);
+  float h = hash12(cell + 11.0);
+  float st = step(0.965, h) * exp(-dot(fp, fp) * 40.0) * (0.25 + 0.75 * fract(h * 37.0));
+  st *= 0.75 + 0.25 * sin(uFieldTime * (0.5 + fract(h * 13.0)) + h * 60.0);
+  sky += vec3(0.8, 0.85, 1.0) * st * 0.35 * smoothstep(0.1, 0.5, y);
+  sky += vec3(0.95, 0.97, 1.0) * meteor(o);
+  return mix(street, sky, uNight.y);
+}
 
 float fieldBlob(vec2 q, vec2 c, float s){
   vec2 d = q - c;
@@ -271,6 +339,7 @@ vec3 fieldColor(vec2 uv){
     st += mix(uPal2, uPal3, 0.4) * exp(-dot(kq, kq) * 1.4) * 0.45; // light gathered through the glass
     c = mix(c, st, uStudio);
   }
+  if (uNight.x > 0.001) c = mix(c, nightColor(uv), uNight.x);
   return c;
 }
 `;

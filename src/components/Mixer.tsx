@@ -1,7 +1,8 @@
-import { DEFAULT_MIX, save, store, useStore } from '../state/store';
+import { DEFAULT_MIX, save, setComfort, store, useStore } from '../state/store';
 import type { MixLevels } from '../state/types';
 import { Label } from './ui';
 import { SoundControl } from './Controls';
+import { glassBtn } from './ui';
 import { MusicPanel } from './Music';
 
 /** Moving any slider counts as the user gesture that may start audio. */
@@ -36,6 +37,25 @@ function Slider({ k, label, note }: { k: keyof MixLevels; label: string; note?: 
 }
 
 /** Sound on/off, master volume and every mixer channel. Mounted once; shown or hidden. */
+/** Comfort mode: one quiet switch under the sound switch. */
+function ComfortToggle() {
+  const comfort = useStore((s) => s.comfort);
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={comfort}
+        onClick={() => setComfort(!comfort)}
+        className={`shrink-0 tap rounded-btn px-4 py-2.5 text-[13px] ${comfort ? glassBtn(true) : `${glassBtn(false)} border-white/10 text-white/60 hover:text-white/90`}`}
+      >
+        Comfort {comfort ? 'on' : 'off'}
+      </button>
+      <span className="text-[10.5px] leading-snug text-white/40">Slower motion, softer glow.</span>
+    </div>
+  );
+}
+
 export function SoundPanel() {
   const resetMix = () => {
     save('mix', DEFAULT_MIX);
@@ -44,6 +64,7 @@ export function SoundPanel() {
   return (
     <div className="flex flex-col gap-4">
       <SoundControl compact />
+      <ComfortToggle />
       <section>
         <Label className="mb-1">Orb</Label>
         <Slider k="orb" label="Material sound" />

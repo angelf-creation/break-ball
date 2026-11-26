@@ -8,7 +8,7 @@ import { CircleButton } from './ui';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 /** scenes that no longer exist, so sessions logged with them keep their name */
-const PAST_SCENES: Record<string, string> = { mercury: 'Liquid Mercury', mould: 'Mould', turrell: 'Turrell', crystal: 'Crystal', prism: 'Prism', fog: 'Fog' };
+const PAST_SCENES: Record<string, string> = { mercury: 'Liquid Mercury', mould: 'Mould', crystal: 'Crystal', prism: 'Prism', fog: 'Fog' };
 
 function fmtMin(sec: number) {
   if (sec > 0 && sec < 60) return '1 min';
@@ -73,8 +73,11 @@ export function CalendarCard() {
           <rect x="5" y="11" width="14" height="9" rx="2" />
           <path d="M8 11V8a4 4 0 018 0v3" />
         </svg>
-        <span>
-          Your progress lives on this device
+        <span className="font-sans font-normal">
+          <span className="block">We don&rsquo;t use or keep your data.</span>
+          <span className="mt-1 block text-[11.5px] leading-snug text-white/55">
+            Your progress is saved on this device only. Clearing your browser data will reset it.
+          </span>
         </span>
       </p>
 

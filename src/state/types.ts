@@ -1,7 +1,9 @@
 export type MaterialId =
   | 'default' | 'glass' | 'jelly' | 'dust' | 'aura' | 'water' | 'powder'
   | 'ice'
-  | 'flower' | 'mushroom' | 'root' | 'medusa' | 'pillow';
+  | 'flower' | 'mushroom' | 'root' | 'medusa' | 'pillow'
+  | 'bubble' | 'milk' | 'ferro' | 'sky' | 'frost' | 'honey' | 'turrell'
+  | 'snow' | 'starfall';
 export type PatternId = 'opcell' | 'moire' | 'cymatic' | 'ganzfeld';
 export type ArtistId = 'default' | 'turrell' | 'janssens' | 'cruzdiez' | 'eliasson' | 'pashgian' | 'corse';
 export type SessionId = 'free' | 'm5' | 'm15' | 'm42' | 'm60' | 'open';
@@ -15,8 +17,8 @@ export type AppMode = 'session' | 'play';
 export type VideoKind = 'desktop' | 'phone';
 
 export const MATERIAL_ORDER: MaterialId[] = [
-  'default', 'glass', 'jelly', 'dust', 'aura', 'water', 'powder',
-  'ice',
+  'default', 'turrell', 'glass', 'bubble', 'honey', 'jelly', 'dust', 'aura', 'sky', 'water', 'milk', 'ferro', 'powder',
+  'ice', 'frost', 'snow', 'starfall',
   'flower', 'mushroom', 'root', 'medusa', 'pillow',
 ];
 export const PATTERN_ORDER: PatternId[] = ['opcell', 'moire', 'cymatic', 'ganzfeld'];
@@ -35,6 +37,8 @@ export interface AppState {
   historyOpen: boolean;
   session: SessionState;
   sound: { enabled: boolean; volume: number };
+  /** gentler motion and less glow; persisted */
+  comfort: boolean;
   time: { live: boolean; scrubHour: number };
   /** chosen from the viewport (phone on narrow/touch screens); not a user setting */
   activeVideo: VideoKind;

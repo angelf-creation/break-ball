@@ -148,3 +148,128 @@ export function makeRootTexture(size = 1536, food = 15000): THREE.CanvasTexture 
   tex.generateMipmaps = true;
   return tex;
 }
+
+/**
+ * Frost ferns, as on a window in the cold: crystals start along the edges and from
+ * scattered nuclei, each a stem with side branches at about 60 degrees, those with
+ * their own smaller branches. Texture: R = arrival 0..1, G = coverage, B = brightness
+ * (stems bright, fine needles fainter). Built once, the first time Frost is chosen.
+ */
+export function makeFrostTexture(size = 1536): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const g = cv.getContext('2d')!;
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, size, size);
+  g.lineCap = 'round';
+  const u = size / 1024;
+  type Seg = { x0: number; y0: number; x1: number; y1: number; t: number; w: number; b: number };
+  const segs: Seg[] = [];
+  const LIMIT = 0.96;
+  // one crystal arm: grows in steps, sprouts side needles, recurses a few levels
+  const arm = (x: number, y: number, a: number, len: number, depth: number, t: number, w: number) => {
+    const steps = Math.max(2, Math.round(len / 0.008));
+    const st = len / steps;
+    let side = Math.random() < 0.5 ? 1 : -1;
+    for (let k = 0; k < steps; k++) {
+      a += (Math.random() - 0.5) * 0.12;
+      const nx = x + Math.cos(a) * st, ny = y + Math.sin(a) * st;
+      if (Math.hypot(nx, ny) > LIMIT) return;
+      const tt = t + st * 1.0;
+      segs.push({ x0: x, y0: y, x1: nx, y1: ny, t: tt, w: w * (1 - (0.6 * k) / steps), b: depth === 0 ? 1 : depth === 1 ? 0.75 : 0.5 });
+      x = nx;
+      y = ny;
+      t = tt;
+      if (depth < 3 && k > 0 && Math.random() < (depth === 0 ? 0.95 : depth === 1 ? 0.8 : 0.5)) {
+        const rest = (steps - k) / steps;
+        const sl = len * (0.16 + 0.22 * Math.random()) * (0.35 + 0.65 * rest);
+        arm(x, y, a + side * (0.95 + (Math.random() - 0.5) * 0.25), sl, depth + 1, t, w * 0.62);
+        if (Math.random() < 0.6) arm(x, y, a - side * (0.95 + (Math.random() - 0.5) * 0.25), sl * 0.8, depth + 1, t, w * 0.6);
+        side = -side;
+      }
+    }
+  };
+  // edge-born ferns reaching inward, and nuclei scattered over the pane
+  for (let i = 0; i < 32; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = 0.9 + Math.random() * 0.05;
+    arm(Math.cos(a) * r, Math.sin(a) * r, a + Math.PI + (Math.random() - 0.5) * 1.1, 0.35 + Math.random() * 0.4, 0, Math.random() * 0.15, 4.2);
+  }
+  for (let i = 0; i < 40; i++) {
+    const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 0.85;
+    // the middle stays clearer, where the sun warms the glass
+    if (r < 0.32 && Math.random() < 0.7) continue;
+    const x = Math.cos(a) * r, y = Math.sin(a) * r, t = 0.15 + Math.random() * 0.35;
+    const n = 3 + Math.floor(Math.random() * 3), a0 = Math.random() * 6.28;
+    for (let k = 0; k < n; k++) arm(x, y, a0 + (k / n) * 6.28 + (Math.random() - 0.5) * 0.4, 0.1 + Math.random() * 0.18, 1, t, 3);
+  }
+  let tMax = 1e-3;
+  for (const s of segs) tMax = Math.max(tMax, s.t);
+  // latest first, so where crystals overlap the earliest arrival is kept
+  segs.sort((a, b) => b.t - a.t);
+  const at = (v: number) => (v * 0.485 + 0.5) * size;
+  for (const s of segs) {
+    g.strokeStyle = `rgb(${Math.round(6 + (s.t / tMax) * 249)},255,${Math.round(s.b * 255)})`;
+    g.lineWidth = Math.max(1.2, s.w * u * 1.5);
+    g.beginPath();
+    g.moveTo(at(s.x0), at(s.y0));
+    g.lineTo(at(s.x1), at(s.y1));
+    g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  return tex;
+}
+
+/**
+ * Ferrofluid spike lattice: a Fibonacci sphere (close to the hexagonal packing a
+ * Rosensweig field makes), baked as an equirect map. R = distance to the nearest
+ * spike centre in units of 0.62 x spacing, G = that spike's size (0.75..1.25).
+ */
+export function makeFerroTexture(n = 150, w = 768, h = 384): THREE.DataTexture {
+  const px = new Float32Array(n), py = new Float32Array(n), pz = new Float32Array(n), sz = new Float32Array(n);
+  const ga = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (2 * (i + 0.5)) / n, r = Math.sqrt(1 - y * y), a = i * ga;
+    px[i] = Math.cos(a) * r;
+    py[i] = y;
+    pz[i] = Math.sin(a) * r;
+    sz[i] = Math.random();
+  }
+  const spacing = Math.sqrt((4 * Math.PI) / n);
+  const reach = spacing * 0.62;
+  const data = new Uint8Array(w * h * 4);
+  for (let j = 0; j < h; j++) {
+    const th = ((j + 0.5) / h) * Math.PI;
+    const y = Math.cos(th), r = Math.sin(th);
+    // only points whose height is near this row can be nearest (y_i is linear in i)
+    const lo = Math.max(0, Math.floor(((1 - (y + spacing * 1.6)) * n) / 2 - 1));
+    const hi = Math.min(n - 1, Math.ceil(((1 - (y - spacing * 1.6)) * n) / 2 + 1));
+    for (let i = 0; i < w; i++) {
+      const ph = ((i + 0.5) / w - 0.5) * Math.PI * 2;
+      const x = Math.cos(ph) * r, z = Math.sin(ph) * r;
+      let best = -2, bi = 0;
+      for (let k = lo; k <= hi; k++) {
+        const d = x * px[k] + y * py[k] + z * pz[k];
+        if (d > best) {
+          best = d;
+          bi = k;
+        }
+      }
+      const ang = Math.acos(Math.min(1, best));
+      const o = (j * w + i) * 4;
+      data[o] = Math.round(Math.min(1, ang / reach) * 255);
+      data[o + 1] = Math.round(sz[bi] * 255);
+      data[o + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}

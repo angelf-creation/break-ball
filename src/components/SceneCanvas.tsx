@@ -12,7 +12,11 @@ export function SceneCanvas({ audio }: { audio?: AudioEngine }) {
     let scene: OrbScene | null = null;
     try {
       scene = new OrbScene(ref.current, {
-        onTouch: audio ? (intensity, pan) => audio.touch(store.get().material, intensity, pan) : undefined,
+        onTouch: (intensity, pan) => {
+          const m = store.get().material;
+          audio?.touch(m, intensity, pan);
+        },
+        onStar: (intensity, pan) => audio?.touch('starfall', intensity, pan),
       });
     } catch (e) {
       console.error(e);

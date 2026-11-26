@@ -12,7 +12,7 @@ import { effectiveDate, lightMood } from '../time/ceTime';
 import { breathAt, sessionElapsed } from '../time/breath';
 import { soundLevel } from '../audio/level';
 import { VideoSource, VIDEO_DISC } from './videoSource';
-import { makeRootTexture } from './growth';
+import { makeFerroTexture, makeFrostTexture, makeRootTexture } from './growth';
 import { buildCreature, CREATURE_KEYS, type Creature, type CreatureKey } from './creatures';
 import { orbVertex, orbFragment } from './shaders/orb';
 import {
@@ -35,6 +35,8 @@ const BREATH_SCALE = 0.13;
 export interface SceneOptions {
   /** called on click / drag with intensity 0..1 and stereo pan -1..1 */
   onTouch?: (intensity: number, pan: number) => void;
+  /** a falling star appeared (Starfall): its brightness 0..1 and stereo pan */
+  onStar?: (intensity: number, pan: number) => void;
 }
 
 function particleGeometry(n: number): THREE.BufferGeometry {
@@ -159,6 +161,25 @@ export class OrbScene {
     uArmSway: { value: new THREE.Vector2() },
     uTouchCrack: { value: Array.from({ length: 4 }, () => new THREE.Vector4(0, 0, 1, -1)) },
     uRoot: { value: 0 },
+    uBubble: { value: 0 },
+    uSnow: { value: 0 },
+    uSnowWind: { value: new THREE.Vector2() },
+    uSwirl: { value: new THREE.Vector4() },
+    uStars: { value: 0 },
+    uSkyRot: { value: new THREE.Matrix3() },
+    uNight: { value: new THREE.Vector2() },
+    uMeteor: { value: new THREE.Vector4() },
+    uMeteorB: { value: new THREE.Vector4() },
+    uHoney: { value: 0 },
+    uField: { value: 0 },
+    uMilk: { value: 0 },
+    uFerro: { value: 0 },
+    uFerroLook: { value: 0 },
+    uFerroField: { value: new THREE.Vector4(0, 0, 1, 0) },
+    uFerroTex: { value: null as THREE.Texture | null },
+    uSky: { value: 0 },
+    uFrost: { value: 0 },
+    uFrostTex: { value: null as THREE.Texture | null },
     uRootTex: { value: null as THREE.Texture | null },
     uSss: { value: 0 },
     uMatte: { value: 0 },
@@ -232,6 +253,7 @@ export class OrbScene {
     const flags: Record<string, boolean> = {
       G_REFRACT: on(g.refract), G_ABSORB: on(g.absorb), G_SOFT: on(g.soft), G_CAUSTIC: on(g.caustic),
       G_AURA: on(g.aura), G_ROOT: on(g.root), G_SSS: on(g.sss),
+      G_BUBBLE: on(g.bubble), G_SNOW: on(g.snow), G_STARS: on(g.stars), G_HONEY: on(g.honey), G_FIELD: on(g.lightfield), G_MILK: on(g.milk), G_FERRO: on(g.ferro), G_SKY: on(g.sky), G_FROST: on(g.frost),
       G_APERFLAT: on(f.aperFlat), G_HAZE: on(f.haze), G_PRISM: on(f.prism), G_RETRO: on(f.retro),
       G_STRIPES: on(f.stripes), G_DISC: on(f.disc) || on(f.mono), G_RESIN: on(f.resin),
     };
@@ -269,6 +291,45 @@ export class OrbScene {
   /** orchid: how far the bloom has opened (restarts from a bud when chosen) */
   private openT = 0;
   private rootTex: THREE.Texture | null = null;
+  private frostTex: THREE.Texture | null = null;
+  private ferroTex: THREE.Texture | null = null;
+  /** ferrofluid: the magnet (a held touch) and how strongly the field lifts the liquid */
+  private ferroAmp = 0;
+  private ferroFocus = 0;
+  private ferroDir = new THREE.Vector3(0, 0, 1);
+  /** Lamplight Snow: sideways drift, the gust now, when the next gust comes, the finger's swirl */
+  private snowWind = 0;
+  private gust = 0;
+  private gustAt = 25;
+  private gustT = 0;
+  private swirl = new THREE.Vector3();
+  /** Starfall: the falling star in flight (one at a time), and when the next is due */
+  private meteorT = -1;
+  private meteorDur = 0.6;
+  private meteorNext = 12;
+  private meteorTouchAt = -99;
+  private skyAngle = 0;
+  /** where a touch is on screen, in orb radii from the centre (view-aligned) */
+  private screenOf(dir: THREE.Vector3) {
+    const v = dir.clone().applyQuaternion(this.group.quaternion);
+    return new THREE.Vector2(v.x, v.y);
+  }
+  private launchMeteor(at: THREE.Vector2 | null, quiet: boolean) {
+    const g = this.gen;
+    const ang = -Math.PI / 2 + (Math.random() - 0.5) * 2.2; // mostly downward, any slant
+    const crossing = !at && Math.random() < 0.15; // now and then one runs out past the rim
+    const len = crossing ? 1.4 + Math.random() * 0.4 : 0.45 + Math.random() * 0.4;
+    const start = at ?? new THREE.Vector2((Math.random() - 0.5) * 1.1, 0.1 + Math.random() * 0.6);
+    if (at) start.sub(new THREE.Vector2(Math.cos(ang), Math.sin(ang)).multiplyScalar(len * 0.25));
+    this.meteorDur = 0.4 + Math.random() * 0.5;
+    this.meteorT = 0;
+    const bright = (quiet ? 0.5 : 1) * (0.75 + 0.25 * Math.random());
+    this.U.uMeteor.value.set(start.x, start.y, ang, 0);
+    this.U.uMeteorB.value.set(len, bright, 1, 0);
+    if (g.stars > 0.5) {
+      this.opts.onStar?.(quiet ? 0.25 : 0.55, Math.max(-1, Math.min(1, start.x)) * 0.7);
+    }
+  }
 
   constructor(container: HTMLElement, opts: SceneOptions = {}) {
     this.container = container;
@@ -575,6 +636,20 @@ export class OrbScene {
   }
 
   private poke(dir: THREE.Vector3, strength: number) {
+    // Lamplight Snow: the finger stirs the air; the flakes swirl round it
+    if (this.gen.snow > 0.3) {
+      const sp = this.screenOf(dir);
+      this.swirl.set(sp.x, sp.y, Math.min(2.4, this.swirl.z + 1.1 * strength));
+    }
+    // Starfall: a tap brings a falling star near the finger, at most one every 4 s
+    if (this.gen.stars > 0.5) {
+      if (strength > 0.8 && this.meteorT < 0 && this.clock - this.meteorTouchAt > 4) {
+        this.meteorTouchAt = this.clock;
+        this.launchMeteor(this.screenOf(dir), store.get().mode === 'session');
+      }
+      this.video.resumeOnGesture();
+      return; // the night sky has no surface to ripple, and no sound but the star's
+    }
     // ice: the touch point becomes the origin of a new crack plane, spreading inward
     if (this.gen.crack > 0.5 && strength > 0.8) {
       this.U.uTouchCrack.value[this.crackIdx].set(dir.x, dir.y, dir.z, this.simClock);
@@ -747,7 +822,8 @@ export class OrbScene {
       }
     }
     const s = store.get();
-    const reduced = s.reducedMotion;
+    // comfort mode: the same gentler motion as reduced motion, and less glow
+    const reduced = s.reducedMotion || s.comfort;
     const U = this.U;
     const artist = ARTIST_BY_ID[s.artist];
 
@@ -1015,8 +1091,8 @@ export class OrbScene {
     if (g.petal > 0.5) this.openT = Math.min(1, this.openT + (dt * Math.max(this.pace, 0.5)) / 9);
     else if (g.petal < 0.02) this.openT = 0;
     U.uOpen.value = this.openT;
-    // roots: the network creeps out over ~26 s, rests, fades and starts again
-    if (g.root > 0.02) {
+    // roots and frost: the network creeps out over ~26 s, rests, fades and starts again
+    if (g.root > 0.02 || g.frost > 0.02) {
       this.growT += dt * (0.35 + 0.65 * this.pace) * (reduced ? 0.5 : 1);
       const ph = this.growT % 46;
       const k = Math.min(1, ph / 26);
@@ -1025,6 +1101,80 @@ export class OrbScene {
     } else this.growT = 0;
     U.uSquash.value = g.sss;
     U.uRoot.value = g.root;
+    U.uBubble.value = g.bubble;
+    U.uSnow.value = g.snow;
+    U.uStars.value = g.stars;
+    // night backdrop for the two night scenes, blended by their weights
+    {
+      const night = Math.min(1, g.snow + g.stars);
+      U.uNight.value.set(night, night > 0.001 ? g.stars / Math.max(1e-3, g.snow + g.stars) : 0);
+    }
+    if (g.snow > 0.001) {
+      // a soft breeze, and a gentle gust every 20-40 s: never a blizzard
+      this.gustT += dt;
+      if (this.gustT > this.gustAt) {
+        this.gustT = 0;
+        this.gustAt = 20 + Math.random() * 20;
+      }
+      const gw = Math.max(0, Math.sin(Math.min(1, this.gustT / 6) * Math.PI)) * (this.gustT < 6 ? 1 : 0);
+      this.gust = damp(this.gust, gw, 1.2, dt);
+      this.snowWind += dt * this.pace * (0.012 + 0.05 * this.gust) * (reduced ? 0.5 : 1);
+      U.uSnowWind.value.set(this.snowWind, this.gust);
+      this.swirl.z = damp(this.swirl.z, 0, 0.6, dt); // the air settles back slowly
+      U.uSwirl.value.set(this.swirl.x, this.swirl.y, this.swirl.z, 0);
+    }
+    if (g.stars > 0.001) {
+      // the sky turns a few degrees a minute
+      this.skyAngle += dt * this.pace * 0.0012 * (reduced ? 0.5 : 1);
+      const ax = new THREE.Vector3(0.2, 1, 0.35).normalize();
+      U.uSkyRot.value.setFromMatrix4(new THREE.Matrix4().makeRotationAxis(ax, this.skyAngle));
+      // falling stars: every 25-90 s (60-180 s and dimmer in a session), never two at once
+      const inSession = s.mode === 'session';
+      if (this.meteorT >= 0) {
+        this.meteorT += dt / this.meteorDur;
+        U.uMeteor.value.w = Math.min(1, this.meteorT);
+        if (this.meteorT >= 1) {
+          this.meteorT = -1;
+          U.uMeteorB.value.z = 0;
+          this.meteorNext = inSession ? 60 + Math.random() * 120 : 25 + Math.random() * 65;
+        }
+      } else if (g.stars > 0.5 && !reduced) {
+        this.meteorNext -= dt;
+        if (this.meteorNext <= 0) this.launchMeteor(null, inSession);
+      }
+    } else {
+      U.uMeteorB.value.z = 0;
+      this.meteorT = -1;
+    }
+    U.uHoney.value = g.honey;
+    U.uField.value = g.lightfield;
+    U.uMilk.value = g.milk;
+    U.uSky.value = g.sky;
+    U.uFrost.value = g.frost;
+    U.uFerroLook.value = g.ferro;
+    if (g.frost > 0.001 && !this.frostTex) {
+      this.frostTex = makeFrostTexture();
+      this.disposables.push(this.frostTex);
+    }
+    U.uFrostTex.value = this.frostTex;
+    // ferrofluid: the field rises slowly while a touch is held there and settles when let go
+    // (critically damped, never a snap); in a session it swells with the breath
+    if (g.ferro > 0.001) {
+      if (!this.ferroTex) {
+        this.ferroTex = makeFerroTexture();
+        this.disposables.push(this.ferroTex);
+      }
+      const held = this.pressed ? 1 : 0;
+      const breathe = this.sessionW * (this.breath - 0.5) * 0.35;
+      this.ferroAmp = damp(this.ferroAmp, 0.62 + 0.38 * held + breathe, held ? 1.6 : 0.9, dt);
+      this.ferroFocus = damp(this.ferroFocus, held ? 1 : 0.2, held ? 1.8 : 0.7, dt);
+      const p = U.uPoke.value as THREE.Vector3;
+      const want = held && p.y < 5 ? p : U.uFront.value;
+      this.ferroDir.lerp(want, 1 - Math.exp(-dt * (held ? 3 : 0.8))).normalize();
+      U.uFerroField.value.set(this.ferroDir.x, this.ferroDir.y, this.ferroDir.z, this.ferroFocus);
+    }
+    U.uFerroTex.value = this.ferroTex;
+    U.uFerro.value = g.ferro * this.ferroAmp;
     U.uSss.value = g.sss;
     U.uMatte.value = g.matte;
     U.uAuraMat.value = g.aura;
@@ -1125,7 +1275,7 @@ export class OrbScene {
     // deep space / deep sea: the field dims for the nebula and the medusa
     U.uFieldLevel.value = (1 - 0.75 * Math.max(g.petal, g.gill)) * (1 - 0.97 * g.emit) * (1 - 0.85 * g.nebula) * (0.034 + 0.026 * f.glow / 0.38) * (0.55 + 0.45 * this.lightInt) * (1 - ganz * 0.5);
     this.paletteJS(this.patternTime * 0.03 + 0.4, U.uBleed.value).multiply(lightK);
-    U.uBleedAmt.value = (0.055 + f.glow * 0.12) * (1 - 0.6 * Math.max(g.nebula, g.petal, g.gill)) * (1 - 0.96 * g.emit) + this.sessionW * (0.02 + 0.04 * this.breath) + fogAmt * 0.03 + this.holdW * 0.05;
+    U.uBleedAmt.value = (0.055 + f.glow * 0.12) * (1 - 0.6 * Math.max(g.nebula, g.petal, g.gill)) * (1 - 0.96 * g.emit) + this.sessionW * (0.02 + 0.04 * this.breath) + fogAmt * 0.03 + this.holdW * 0.05 + this.gen.lightfield * 0.2;
     this.updateOrbScreen();
 
     this.paletteJS(this.patternTime * 0.03 + 0.125, this.tmpC);
@@ -1134,7 +1284,7 @@ export class OrbScene {
       .multiplyScalar(0.85)
       .multiply(this.tmpC2.setRGB(1, 1, 1).lerp(this.lightColor, 0.38).multiplyScalar(this.lightInt).add(this.ambient));
 
-    this.bloom.strength = 0.4 - ganz * 0.22 - this.sessionW * 0.1 + f.disc * 0.12 + U.uBloom.value * 0.3 + this.holdW * 0.06;
+    this.bloom.strength = (s.comfort ? 0.6 : 1) * (0.4 - ganz * 0.22 - this.sessionW * 0.1 + f.disc * 0.12 + U.uBloom.value * 0.3 + this.holdW * 0.06 + this.gen.lightfield * 0.55);
     U.uBleedAmt.value += U.uBloom.value * 0.14;
 
     this.composer.render(dt);

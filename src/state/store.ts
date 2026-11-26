@@ -31,6 +31,7 @@ export function saveBreath(id: BreathPresetId) {
 
 const LEN_KEY = 'break-ball.length';
 const MIX_KEY = 'break-ball.mix';
+export const COMFORT_KEY = 'break-ball.comfort';
 export const DEFAULT_MIX: MixLevels = {
   orb: 0.8, rain: 0, wind: 0, waves: 0, birdsong: 0, music: 0.8, tone40: 0, tone136: 0, binaural: 0, breath: 0.5,
 };
@@ -51,6 +52,15 @@ function load<T>(key: string, fallback: T, ok: (v: unknown) => boolean): T {
     /* blocked or corrupt: use the default */
   }
   return fallback;
+}
+/** comfort mode, kept for next time */
+export function setComfort(v: boolean) {
+  try {
+    window.localStorage.setItem(COMFORT_KEY, JSON.stringify(v));
+  } catch {
+    /* ignore */
+  }
+  store.set({ comfort: v });
 }
 export function save(key: 'length' | 'mix', value: unknown) {
   try {
@@ -81,6 +91,7 @@ const initial: AppState = {
   historyOpen: typeof window !== 'undefined' && firstVisit(),
   session: { id: 'free', startedAt: null, durationSec: 0 },
   sound: { enabled: false, volume: 0.6 },
+  comfort: typeof window !== 'undefined' ? load<boolean>(COMFORT_KEY, false, (v) => typeof v === 'boolean') : false,
   time: { live: true, scrubHour: 12 },
   activeVideo:
     typeof window !== 'undefined' && window.matchMedia(compactQuery).matches ? 'phone' : 'desktop',

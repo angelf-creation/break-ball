@@ -27,6 +27,8 @@ ${NOISE}
 ${LOOK}
 ${FIELD}
 ${DISPERSION}
+// two soft octaves: large shapes without the fine crinkle of fbm
+float fbm2(vec2 p){ return 0.66 * snoise(p) + 0.34 * snoise(p * 2.1 + 17.1); }
 uniform float uTime;
 uniform sampler2D uVideo;
 uniform float uVideoOn;
@@ -51,6 +53,19 @@ uniform float uGrowFade;    // root: fades the old network before the next one s
 uniform float uSss;     // pure subsurface (marshmallow)
 uniform float uCreature; // 0..1: the skin gives way to a modelled scene (scene/creatures)
 uniform float uAuraMat; // Soft Light: light diffused through frosted glass
+uniform float uBubble;  // soap bubble film
+uniform float uHoney;   // honey
+uniform float uField;   // Turrell light field
+uniform float uSnow;    // Lamplight Snow
+uniform vec2 uSnowWind; // x = how far the wind has carried the snow sideways, y = gust strength now
+uniform vec4 uSwirl;    // xy = where the finger stirred the air (orb radii), z = strength
+uniform float uStars;   // Starfall
+uniform mat3 uSkyRot;   // the slow turn of the sky
+uniform float uMilk;    // cream in coffee
+uniform float uFerroLook; // ferrofluid: black mirror
+uniform float uSky;     // daytime sky
+uniform float uFrost;   // frost on a window
+uniform sampler2D uFrostTex; // R = arrival order, G = coverage, B = brightness of the crystal
 uniform vec3 uSonic;
 uniform float uSonicT;
 uniform float uMatte;   // no gloss, film or mirror
@@ -454,7 +469,23 @@ void main(){
   vec2 qs = surf(q, -1.0);
   vec3 bc = artist(pattern(qs), qs, q) * 0.2;
   bc *= mix(vec3(1.0), uLightColor, 0.38) * uLightInt + uAmbient;
-  gl_FragColor = vec4(max(bc, 0.0), (1.0 - uSoften * smoothstep(0.45, 1.0, r) * 0.95) * (1.0 - uCreature));
+  float backA = (1.0 - uSoften * smoothstep(0.45, 1.0, r) * 0.95) * (1.0 - uCreature);
+#ifdef G_BUBBLE
+  if (uBubble > 0.002){
+    // the far side of the film, seen through the near one: fainter, mirrored swirls
+    vec3 dB = -normalize(vDir);
+    vec2 bqB = vec2(dB.x + dB.z * 0.6, dB.y) * 0.9;
+    float swB = 0.5 + 0.5 * snoise(bqB * 1.3 + vec2(uTime * 0.02, 0.0));
+    float thB = max(40.0 + 560.0 * smoothstep(-0.95, 0.9, -dB.y) + 300.0 * (swB - 0.5), 0.0);
+    vec3 fB = 0.5 - 0.5 * cos(6.2831853 * 2.0 * 1.33 * thB * 0.8 / vec3(650.0, 532.0, 450.0));
+    fB = fB * fB * fB * 0.9 * (0.1 + 0.9 * r * r);                   // brighter toward the rim, like the photos
+    bc = mix(bc, fB, uBubble);
+    backA = mix(backA, clamp(lum(fB) * 1.4, 0.0, 0.35), uBubble);
+  }
+#endif
+  backA *= 1.0 - uField;
+  backA *= 1.0 - max(uSnow, uStars);
+  gl_FragColor = vec4(max(bc, 0.0), backA);
   return;
 #endif
 
@@ -626,6 +657,282 @@ void main(){
   }
 #endif
 
+
+  // ---- soap bubble: interference colours in a film that swirls and drains ----
+  // After soap bubbles on black: the colour is reflection, so it lives where the film
+  // catches light; the film thins toward the top (gold, then black) and is thickest below.
+  float bubbleA = 1.0; // the film's own coverage (alpha), used by its weight below
+#ifdef G_BUBBLE
+  if (uBubble > 0.002){
+    vec3 d = normalize(vDir);
+    // marangoni swirls: smooth, folding bands of thickness (two levels of gentle warp)
+    vec2 bq = vec2(d.x + d.z * 0.6, d.y) * 0.9;
+    float tb = uTime * 0.025;
+    vec2 wq = bq + 0.6 * vec2(snoise(bq * 0.8 + vec2(3.1, tb)), snoise(bq * 0.8 + vec2(7.4, -tb)));
+    wq += 0.25 * vec2(snoise(wq * 2.1 + 1.0 + tb), snoise(wq * 2.1 + 5.0 - tb));
+    float swirl = 0.5 + 0.5 * snoise(wq * 1.2 + vec2(0.0, tb * 0.5));
+    float drain = smoothstep(-0.95, 0.9, -d.y);                     // thick below, thin (black) on top
+    float thick = max(40.0 + 560.0 * drain + 300.0 * (swirl - 0.5), 0.0);
+    // a soap film in air: half-wave phase shift, so the thinnest film is black
+    float nf = 1.33, cT = sqrt(max(1.0 - (1.0 - NdV * NdV) / (nf * nf), 0.0));
+    vec3 fc = 0.5 - 0.5 * cos(6.2831853 * 2.0 * nf * thick * cT / vec3(650.0, 532.0, 450.0));
+    fc = fc * fc * fc * 1.7;                                              // deep, saturated, like the photographs
+    float lit = 0.06 + 0.8 * fres + 0.5 * smoothstep(0.5, 1.0, dot(N, L) * 0.5 + 0.5);
+    vec3 bub = fc * lit + env(refl) * fc * 0.35;
+    bub += vec3(1.0) * 1.2 * pow(NdH, 600.0);                        // the window highlight
+    float bl = lum(fc * lit);
+    body = mix(body, bub, uBubble);
+    // mostly clear: only where the film shows colour does it cover what is behind
+    bubbleA = clamp(0.04 + bl * 1.4 + fres * 0.25, 0.0, 1.0);
+  }
+#endif
+
+  // ---- honey: thick amber, folds drawing slowly down, warm light from inside ----
+#ifdef G_HONEY
+  if (uHoney > 0.002){
+    vec3 d = normalize(vDir);
+    float th = uTime * 0.012;
+    // faint streaks where it has been drawn and folded: barely there, as in real honey
+    vec2 hq = vec2(d.x * 1.1 + d.z * 0.5 + 0.3 * fbm2(vec2(d.y * 1.2, th)), d.y * 0.4 + th);
+    float ribbon = smoothstep(0.6, 1.0, sin(hq.x * 7.0 + 2.5 * fbm2(hq * 1.4)) * 0.5 + 0.5);
+    // Beer-Lambert through the ball: blue goes first, then green; the centre is deep
+    // red-amber, the thin rim bright gold
+    vec3 sigma = vec3(0.9, 2.6, 7.5);
+    float path = 0.12 + 1.9 * T * T - 0.12 * ribbon;
+    vec3 trans = exp(-sigma * path);
+    vec3 hc = vec3(1.0, 0.9, 0.62) * trans * 1.1 + vec3(0.2, 0.045, 0.004) * (1.0 - trans.r) ;
+    // light refracted through: the bright side of the room shows inverted, low in the ball
+    float caust = exp(-sq(length(p - vec2(0.25, -0.35)) / 0.32));
+    hc += vec3(1.0, 0.62, 0.12) * caust * 0.35;
+    // a few tiny trapped bubbles
+    vec2 bc2 = p * 22.0 + vec2(0.0, th * 4.0);
+    vec2 cell = floor(bc2), fr = fract(bc2) - 0.5 + 0.3 * (hash22(cell) - 0.5);
+    float bub = step(0.93, hash12(cell)) * smoothstep(0.12, 0.06, length(fr));
+    hc += vec3(1.0, 0.85, 0.5) * bub * 0.25 * (1.0 - r);
+    // light carried through the honey: a warm glow on the side away from the light
+    float back = pow(clamp(dot(-N, L) * 0.5 + 0.5, 0.0, 1.0), 2.0);
+    emission += vec3(1.0, 0.5, 0.08) * (0.03 + 0.25 * back * (1.0 - T) * (1.0 - T)) * uHoney;
+    hc *= 0.8 + 0.3 * ((dot(N, L) + 0.6) / 1.6);
+    hc += vec3(1.0, 0.75, 0.35) * ribbon * 0.035 * T;
+    hc *= mix(1.05, 0.5, T * T);                                      // deep where it is thick
+    // glossy: a long warm highlight and the room in the surface
+    hc += env(refl) * vec3(1.0, 0.85, 0.6) * (0.06 + 0.5 * fres) + vec3(1.0, 0.93, 0.8) * (2.0 * pow(NdH, 700.0) + 0.12 * pow(NdH, 40.0));
+    body = mix(body, hc, uHoney);
+  }
+#endif
+
+  // ---- Turrell: only light; no surface, no edge ----
+#ifdef G_FIELD
+  if (uField > 0.002){
+    // four colours, each held for about a minute and a half, crossing very slowly
+    float ph = fract(uTime / 360.0) * 4.0;
+    vec3 c0 = vec3(0.46, 0.26, 0.46), c1 = vec3(1.0, 0.64, 0.42), c2 = vec3(0.6, 0.88, 0.78), c3 = vec3(0.86, 0.55, 0.6);
+    float k = smoothstep(0.0, 1.0, fract(ph));
+    vec3 a = ph < 1.0 ? c0 : ph < 2.0 ? c1 : ph < 3.0 ? c2 : c3;
+    vec3 b = ph < 1.0 ? c1 : ph < 2.0 ? c2 : ph < 3.0 ? c3 : c0;
+    vec3 lf = mix(a, b, k);
+    // almost even: a breath brighter in the middle, a trace of the next colour at the edge
+    lf = mix(lf, b, 0.18 * smoothstep(0.2, 1.0, r)) * (1.05 - 0.15 * r * r);
+    emission += lf * 0.35 * uField;
+    body = mix(body, lf * 0.75, uField);
+  }
+#endif
+
+
+  // ---- Lamplight Snow: the orb is a street lamp's warm halo, snow drifting through ----
+  float snowA = 1.0;
+#ifdef G_SNOW
+  if (uSnow > 0.002){
+    // ~2700 K tungsten: warm white, not sodium orange
+    vec3 lamp = vec3(1.0, 0.78, 0.56);
+    float halo = exp(-r * r * 2.2);
+    vec3 sc = lamp * (0.06 + 0.55 * halo + 0.35 * exp(-r * r * 9.0));
+    // the finger stirs the air: flakes near it are carried round, then the swirl dies away
+    vec2 sq = p;
+    vec2 sw = sq - uSwirl.xy;
+    float swirlA = uSwirl.z * exp(-dot(sw, sw) / 0.09);
+    float cs = cos(swirlA), sn = sin(swirlA);
+    sq = uSwirl.xy + mat2(cs, -sn, sn, cs) * sw;
+    float flakes = 0.0;
+    for (int i = 0; i < 3; i++){
+      float fi = float(i);
+      // 0: near (large, soft, out of focus), 1: mid (sharp), 2: far (tiny specks)
+      float cells = fi == 0.0 ? 3.2 : fi == 1.0 ? 7.0 : 15.0;
+      float fall = fi == 0.0 ? 0.11 : fi == 1.0 ? 0.075 : 0.045;
+      float size = fi == 0.0 ? 0.07 : fi == 1.0 ? 0.018 : 0.008;
+      float soft = fi == 0.0 ? 0.6 : fi == 1.0 ? 0.25 : 0.45;
+      float lev = fi == 0.0 ? 0.22 : fi == 1.0 ? 0.85 : 0.5;
+      vec2 q = sq * cells;
+      q.y += uTime * fall * cells;
+      q.x -= uSnowWind.x * cells * (1.2 - fi * 0.3);
+      vec2 cell = floor(q);
+      float h = hash12(cell + fi * 31.0);
+      // each flake rocks gently from side to side as it falls
+      vec2 c = vec2(0.5) + 0.32 * (hash22(cell + fi * 7.0) - 0.5) * 2.0;
+      c.x += 0.18 * sin(uTime * (0.4 + h * 0.5) + h * 30.0) * (1.0 + 2.0 * uSnowWind.y);
+      float dd = length(fract(q) - c) / cells;
+      float f = (1.0 - smoothstep(size * (1.0 - soft), size, dd)) * step(fi == 0.0 ? 0.8 : fi == 1.0 ? 0.62 : 0.5, h);
+      flakes += f * lev * (0.6 + 0.4 * fract(h * 17.0));
+    }
+    // snow only shows in the light: bright in the halo, almost gone beyond it
+    float seenS = 0.08 + 0.92 * smoothstep(1.0, 0.15, r);
+    sc += mix(lamp, vec3(1.0), 0.5) * flakes * seenS * (0.5 + 0.9 * halo);
+    // a faint line of snow settling along the bottom of the light
+    float drift = smoothstep(-0.78, -0.9, p.y + 0.03 * snoise(vec2(p.x * 6.0, 1.0))) * smoothstep(1.0, 0.6, r);
+    sc += vec3(0.9, 0.85, 0.8) * drift * 0.18 * halo;
+    emission += sc * 0.25 * uSnow;
+    body = mix(body, sc * 0.8, uSnow);
+    // no surface: the light simply thins out into the night
+    snowA = clamp(0.25 + 0.75 * halo + flakes * seenS * 0.5, 0.0, 1.0) * smoothstep(1.0, 0.75, r);
+  }
+#endif
+
+  // ---- Starfall: a deep-blue glass ball holding the night sky ----
+#ifdef G_STARS
+  if (uStars > 0.002){
+    vec3 sd = uSkyRot * normalize(vDir);
+    vec3 skyC = mix(vec3(0.006, 0.01, 0.035), vec3(0.015, 0.025, 0.08), 0.5 + 0.5 * sd.y);
+    // the Milky Way: a soft band of haze across the ball at an angle, with dark lanes
+    vec3 bandN = normalize(vec3(0.45, 0.75, 0.48));
+    float bd = dot(sd, bandN);
+    vec2 bq = vec2(dot(sd, normalize(cross(bandN, vec3(0.0, 0.0, 1.0)))), bd) * 3.0;
+    float band = exp(-bd * bd / 0.035) * (0.55 + 0.45 * fbm2(bq * 1.3));
+    band *= 1.0 - 0.55 * smoothstep(0.1, 0.5, fbm2(bq * 2.6 + 4.0)) * exp(-bd * bd / 0.01);
+    skyC += mix(vec3(0.32, 0.36, 0.55), vec3(0.6, 0.5, 0.42), smoothstep(0.3, 0.8, fbm2(bq * 0.8))) * band * 0.22;
+    // stars: one per cell of a grid around the sphere, if the cell has one
+    float starL = 0.0; vec3 starC = vec3(0.0);
+    for (int k = 0; k < 2; k++){
+      float K = k == 0 ? 34.0 : 11.0;
+      vec3 g = sd * K;
+      vec3 cell = floor(g);
+      float h = hash12(cell.xy + cell.z * 17.31 + float(k) * 5.0);
+      vec3 jit = vec3(hash22(cell.xy + cell.z * 3.7), hash12(cell.yz + 2.0)) * 0.7 + 0.15;
+      vec3 spos = normalize((cell + jit) / K);
+      float ang = acos(clamp(dot(sd, spos), -1.0, 1.0));
+      float bright = k == 0 ? fract(h * 41.0) : 0.6 + 0.4 * fract(h * 41.0);
+      float has = step(k == 0 ? 0.7 : 0.9, h);
+      float sz = (k == 0 ? 0.0028 : 0.005) * (0.6 + bright);
+      // twinkle: slow and subtle, every star on its own timing
+      float tw = 0.78 + 0.22 * sin(uTime * (0.35 + fract(h * 13.0) * 0.9) + h * 80.0);
+      float s = has * exp(-ang * ang / (sz * sz)) * bright * tw * (k == 0 ? 0.7 : 1.6);
+      starL += s;
+      vec3 tint = fract(h * 7.0) < 0.5 ? vec3(0.8, 0.88, 1.0) : vec3(1.0, 0.92, 0.8);
+      starC += tint * s;
+    }
+    vec3 sc = skyC + starC;
+    sc += vec3(0.95, 0.97, 1.0) * meteor(p);
+    // the glass: a cool rim and a crisp window reflection
+    sc += vec3(0.25, 0.35, 0.7) * pow(1.0 - NdV, 3.0) * 0.35;
+    sc += env(refl) * (0.04 + 0.5 * fres) + vec3(1.0) * 1.3 * pow(NdH, 500.0);
+    emission += (starC + vec3(0.95, 0.97, 1.0) * meteor(p)) * 0.6 * uStars;
+    body = mix(body, sc, uStars);
+  }
+#endif
+
+  // ---- milk in coffee: cream plumes curling down through espresso ----
+#ifdef G_MILK
+  if (uMilk > 0.002){
+    vec3 d = normalize(vDir);
+    float tm = uTime * 0.03;
+    // plumes sink and curl: warp the space by a flow that drifts downward
+    vec2 mq = vec2(d.x * 0.7 + d.z * 0.35, d.y * 0.6 + tm * 0.6);
+    vec2 f1 = vec2(fbm2(mq * 0.9 + vec2(0.0, tm)), fbm2(mq * 0.9 + vec2(4.7, -tm)));
+    vec2 f2 = vec2(snoise(mq * 1.7 + f1 * 1.3 + 2.0), snoise(mq * 1.7 + f1 * 1.3 + 7.1));
+    float cream = 0.39 + 0.55 * fbm2(mq * 1.1 + f1 * 0.9 + f2 * 0.35);
+    cream += 0.32 * smoothstep(-0.3, 0.9, d.y - 0.3 * d.x) - 0.3 * smoothstep(0.0, -0.9, d.y); // poured in at the top
+    // fine lace where cream meets coffee: thin ribbons that fold along the boundary
+    float lace = 1.0 - clamp(abs(snoise(mq * 5.0 + f2 * 1.5)) * 2.5, 0.0, 1.0);
+    float bound = 1.0 - smoothstep(0.0, 0.16, abs(cream - 0.52));
+    float tendril = lace * bound;
+    float c = smoothstep(0.5, 0.58, cream + 0.09 * tendril - 0.04 * bound * (1.0 - lace));
+    float edge = smoothstep(0.36, 0.5, cream) * (1.0 - c);              // where it thins: amber
+    vec3 espresso = vec3(0.022, 0.008, 0.004) * (0.8 + 0.4 * f1.x);
+    vec3 amber = vec3(0.62, 0.26, 0.06) * (0.75 + 0.5 * tendril);
+    vec3 creamC = mix(vec3(0.86, 0.66, 0.44), vec3(0.98, 0.93, 0.85), smoothstep(0.6, 0.95, cream));
+    vec3 mc = mix(espresso, amber, edge * 0.9);
+    mc = mix(mc, creamC, c);
+    // light passes into the cream and glows a little; espresso stays deep
+    mc *= 0.6 + 0.55 * ((dot(N, L) + 0.8) / 1.8);
+    mc += vec3(0.5, 0.2, 0.05) * edge * 0.12 * T;
+    body = mix(body, mc, uMilk);
+  }
+#endif
+
+  // ---- ferrofluid: black liquid mirror ----
+#ifdef G_FERRO
+  if (uFerroLook > 0.002){
+    vec3 E = env(refl);
+    // an oily, faint interference sheen in the reflections (like the photographs)
+    float fd = 360.0 + 140.0 * snoise(vDir.xy * 3.0 + vDir.z + uTime * 0.02);
+    vec3 sheen = mix(vec3(1.0), thinFilm(NdV, fd) * 1.6, 0.45);
+    vec3 fc = vec3(0.002, 0.002, 0.003) + vec3(0.92, 0.95, 1.06) * lum(E) * sheen * (0.12 + 0.88 * fres) * 0.8;
+    fc += mix(vec3(1.0), uLightColor, 0.3) * (2.4 * pow(NdH, 220.0) + 0.06 * pow(NdH, 30.0));
+    body = mix(body, fc, uFerroLook);
+  }
+#endif
+
+  // ---- sky: blue air with cumulus, lit by the sun from above ----
+#ifdef G_SKY
+  if (uSky > 0.002){
+    vec3 d = normalize(vDir);
+    float h = d.y;
+    vec3 zen = vec3(0.03, 0.22, 0.66), hor = vec3(0.42, 0.72, 0.93);
+    vec3 air = mix(hor, zen, smoothstep(-0.6, 0.9, h));
+    vec2 cq = vec2(d.x + d.z * 0.5, d.y + d.z * 0.3) * 1.0 + vec2(uTime * 0.01, 0.0);
+    vec2 cw = 0.3 * vec2(snoise(cq * 0.7 + 3.1), snoise(cq * 0.7 + 8.4));
+    // big rounded heaps, their edges built of smaller billows (cauliflower tops)
+    float billow = 1.0 - abs(snoise((cq + cw) * 3.2));
+    float cl = 0.5 + 0.6 * fbm2((cq + cw) * 1.1) + 0.12 * billow + 0.05 * (1.0 - abs(snoise((cq + cw) * 7.5)));
+    float cover = smoothstep(0.6, 0.68, cl + 0.12 * smoothstep(0.3, -0.8, h));
+    // self-shadow: the cloud a little toward the sun is denser = this side is in its shade
+    vec2 sq2 = cq + cw + vec2(-0.05, 0.13);
+    float cs = 0.5 + 0.6 * fbm2(sq2 * 1.1) + 0.12 * (1.0 - abs(snoise(sq2 * 3.2)));
+    float lit = clamp(0.7 + (cl - cs) * 4.0, 0.0, 1.0) * (0.75 + 0.25 * smoothstep(0.56, 0.9, cl));
+    vec3 cloud = mix(vec3(0.58, 0.66, 0.8), vec3(1.0, 0.99, 0.97), lit);
+    cloud = mix(cloud, air * 1.15, 0.12 * (1.0 - cover));
+    vec3 sc = mix(air, cloud, cover);
+    sc += vec3(1.0, 0.97, 0.9) * 0.12 * smoothstep(0.75, 1.0, dot(d, normalize(vec3(-0.35, 0.8, 0.5))));
+    sc *= 0.86 + 0.2 * ((dot(N, L) + 1.0) * 0.5);
+    emission += sc * 0.22 * uSky;                                     // air glows; it is never in shadow
+    body = mix(body, sc * 0.85, uSky);
+  }
+#endif
+
+  // ---- frost on a window: ice ferns spreading over sunlit glass ----
+#ifdef G_FROST
+  if (uFrost > 0.002){
+    vec3 d = normalize(vDir);
+    vec2 fq = discMap(d);
+    if (d.z < 0.0) fq = mat2(0.36, -0.93, 0.93, 0.36) * fq;
+    vec2 fuv = fq * 0.47 + 0.5;
+    vec4 ft = texture2D(uFrostTex, fuv);
+    vec4 fb = texture2D(uFrostTex, fuv, 3.0);
+    float ord = ft.r / max(ft.g, 0.02);
+    float lead = uGrow * 1.1;
+    float seen = (1.0 - smoothstep(lead - 0.04, lead, ord)) * ft.g * uGrowFade;
+    float seenB = (1.0 - smoothstep(lead - 0.1, lead, fb.r / max(fb.g, 0.02))) * fb.g * uGrowFade;
+    // the glass: cool blue, the morning sun glowing through low on one side
+    vec2 sunP = vec2(-0.12, -0.05) + 0.05 * vec2(sin(uTime * 0.02), cos(uTime * 0.017));
+    float sd = length(fq - sunP);
+    vec3 glass = mix(vec3(0.05, 0.1, 0.2), vec3(0.28, 0.4, 0.58), smoothstep(1.2, 0.0, length(fq - vec2(0.35, 0.5))));
+    glass = mix(glass, vec3(0.72, 0.74, 0.76), 0.45 * smoothstep(0.7, 0.05, sd));
+    vec3 sun = vec3(1.0, 0.86, 0.64) * (exp(-sd * sd * 60.0) * 0.55 + exp(-sd * sd * 6.0) * 0.2);
+    glass += sun;
+    glass *= 0.95 + 0.06 * snoise(fq * 140.0);                          // a fine film of rime
+    glass = mix(glass, glass * 1.1 + vec3(0.03, 0.05, 0.07), clamp(seenB * 0.6, 0.0, 0.35)); // haze around the ferns
+    // the crystals: white-blue, edges catching the sun, darker toward the deep cold
+    float bright = ft.b / max(ft.g, 0.02);
+    vec3 ice = mix(vec3(0.45, 0.58, 0.76), vec3(0.97, 0.99, 1.0), bright) * (0.85 + 0.3 * smoothstep(0.8, 0.1, sd));
+    ice += sun * 0.55 * bright;
+    float spark = step(0.985, hash12(floor(fuv * 900.0))) * seen;
+    float tw = 0.5 + 0.5 * sin(uTime * 2.2 + hash12(floor(fuv * 900.0) + 3.0) * 40.0);
+    vec3 fc = mix(glass, ice, seen * (0.55 + 0.4 * bright));
+    fc *= 0.75 + 0.35 * ((dot(N, L) + 0.9) / 1.9);
+    emission += (spark * tw * (0.5 + 1.5 * exp(-sd * sd * 6.0)) * vec3(1.0, 0.95, 0.85) + sun * 0.08) * uFrost;
+    body = mix(body, fc, uFrost);
+  }
+#endif
+
   // ---- pillow: plush velvet, printable ----
 #ifdef G_SSS
   if (uSss > 0.002){
@@ -694,6 +1001,7 @@ void main(){
   // Turrell's field is matte and even, like fog: no sharp speculars in his mode
   // frost diffuses reflections (frosted, it glows rather than mirrors)
   float gloss = (1.0 - 0.85 * uAperFlat) * (1.0 - uMatte);
+  gloss *= (1.0 - uSnow) * (1.0 - uStars) * (1.0 - uField) * (1.0 - 0.7 * uHoney) * (1.0 - 0.9 * uFerroLook) * (1.0 - 0.6 * uBubble); // these two draw their own reflections
   body += gloss * (env(refl) * (0.03 + 0.75 * fres) * (0.35 + 0.65 * max(uRefract, uClarity)) * (1.0 - 0.75 * uResin)
          + uLightColor * (0.2 * pow(NdH, 70.0) * uOrigin + 1.6 * pow(NdH, 300.0) * (1.0 - uOrigin)) * (1.0 - 0.75 * uSoft));
   // Pashgian: very high polish, a tight bright highlight and a crisp reflection at the rim
@@ -713,7 +1021,7 @@ void main(){
   float filmD = 320.0 + 160.0 * snoise(vDir.xy * 1.7 + vDir.z + uTime * 0.03);
   vec3 film = thinFilm(NdV, filmD);
   float edgeLine = smoothstep(0.94, 0.995, r);
-  float rimFade = (1.0 - uGanz * 0.8) * (1.0 - uSoften * 0.85) * (1.0 - 0.7 * uResin) * (1.0 - 0.8 * uAperFlat) * (1.0 - 0.9 * uMatte);
+  float rimFade = (1.0 - uSnow) * (1.0 - 0.7 * uStars) * (1.0 - uField) * (1.0 - uGanz * 0.8) * (1.0 - uSoften * 0.85) * (1.0 - 0.7 * uResin) * (1.0 - 0.8 * uAperFlat) * (1.0 - 0.9 * uMatte);
   col += (rim * (film * 0.55 * uFilm + uLightColor * 0.08) + edgeLine * film * 0.1 * uFilm) * rimFade;
 
   col *= 1.0 + uSession * (uBreath - 0.5) * 0.18;
@@ -734,6 +1042,10 @@ void main(){
   // Janssens: the outer third melts into the background
   alpha *= 1.0 - uSoften * smoothstep(0.45, 1.0, r) * 0.92;
   alpha *= 1.0 - uCreature;
+  alpha = mix(alpha, bubbleA, clamp(uBubble, 0.0, 1.0));
+  // Turrell: the edge is gone; the light simply thins into the room
+  alpha *= 1.0 - uField * (1.0 - smoothstep(1.0, 0.25, r)) * 0.97;
+  alpha = mix(alpha, snowA, clamp(uSnow, 0.0, 1.0));
   // sound: rings of soft shimmer over the skin
   col *= 1.0 + uSonic.x * (0.05 + 0.06 * sin(r * (10.0 + 9.0 * uSonic.z) - uSonicT));
   // never let a bad pixel reach the bloom
