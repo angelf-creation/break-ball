@@ -57,7 +57,6 @@ uniform float uBubble;  // soap bubble film
 uniform float uHoney;   // honey
 uniform float uField;   // Turrell light field
 uniform float uSnow;    // Lamplight Snow
-uniform vec2 uSnowWind; // x = how far the wind has carried the snow sideways, y = gust strength now
 uniform vec4 uSwirl;    // xy = where the finger stirred the air (orb radii), z = strength
 uniform float uStars;   // Starfall
 uniform mat3 uSkyRot;   // the slow turn of the sky
@@ -66,6 +65,7 @@ uniform float uFerroLook; // ferrofluid: black mirror
 uniform float uSky;     // daytime sky
 uniform float uFrost;   // frost on a window
 uniform sampler2D uFrostTex; // R = arrival order, G = coverage, B = brightness of the crystal
+uniform vec4 uFrostTouch[4]; // xyz = where the glass was touched (object space), w = when (pattern clock), < 0 unused
 uniform vec3 uSonic;
 uniform float uSonicT;
 uniform float uMatte;   // no gloss, film or mirror
@@ -579,19 +579,24 @@ void main(){
   }
 #endif
 
-  // ---- roots: feathered dark fans advancing over glowing gold ----
-  // After the recording: rust at the young tips, nearly black-red where the fan is old,
-  // fine lit gaps between the fingers, and white-hot channels melting down the trunks.
-  // The texture stores WHEN each twig was reached; uGrow sweeps through that order.
+  // ---- Psilocybin: the root network, violet and blue, breathing and melting ----
+  // The same growth (the texture stores WHEN each twig was reached), seen as on a mushroom
+  // trip: the ground breathes in slow waves, the space swirls and wobbles, colour travels
+  // outward in rings, and the channels glow cyan.
 #ifdef G_ROOT
   if (uRoot > 0.002){
     vec3 d = normalize(vDir);
     vec2 rq = discMap(d);
     if (d.z < 0.0) rq = mat2(0.36, -0.93, 0.93, 0.36) * rq; // the far side is turned, so it isn't a mirror
+    float rl0 = length(rq);
+    // breathing and melting: a slow swirl at the centre, waves of swelling running outward
+    float sw = 0.35 * sin(uTime * 0.07) * exp(-rl0 * 2.2);
+    rq = mat2(cos(sw), -sin(sw), sin(sw), cos(sw)) * rq;
+    rq *= 1.0 + 0.035 * sin(uTime * 0.45 - rl0 * 7.0);
+    rq += 0.03 * vec2(snoise(rq * 2.2 + vec2(uTime * 0.08, 0.0)), snoise(rq * 2.2 + vec2(5.0, -uTime * 0.07)));
     float rl = length(rq);
-    rq += 0.014 * rl * vec2(sin(rq.y * 5.0 + uTime * 0.23), cos(rq.x * 4.0 - uTime * 0.19));
     vec2 ruv = rq * 0.47 + 0.5;
-    ruv += 0.0024 * vec2(snoise(rq * 30.0), snoise(rq * 30.0 + 7.3)) + 0.0016 * vec2(snoise(rq * 80.0), snoise(rq * 80.0 + 3.1));  // ragged, inky edges
+    ruv += 0.0024 * vec2(snoise(rq * 30.0), snoise(rq * 30.0 + 7.3)) + 0.0016 * vec2(snoise(rq * 80.0), snoise(rq * 80.0 + 3.1));
     float chan = texture2D(uRootTex, mix(rq * 0.47 + 0.5, ruv, 0.35), 0.5).b;
     vec4 rt = texture2D(uRootTex, ruv);
     vec4 rb = texture2D(uRootTex, ruv, 3.0);
@@ -605,30 +610,35 @@ void main(){
     float seenB = (1.0 - smoothstep(lead - 0.12, lead, ordB)) * rb.g * uGrowFade;
     float seenW = (1.0 - smoothstep(lead - 0.18, lead, ordW)) * rw.g * uGrowFade;
     float young = smoothstep(lead - 0.26, lead - 0.01, ord);
-    // lit ground: gold, warmer where a fan is near
-    vec3 gold = mix(vec3(1.0, 0.56, 0.07), vec3(0.92, 0.37, 0.02), smoothstep(0.1, 1.05, rl + 0.25 * snoise(rq * 0.9 + uTime * 0.012)));
-    gold *= 0.96 + 0.05 * snoise(rq * 60.0) + 0.05 * snoise(rq * 150.0);
-    gold = mix(gold, vec3(0.95, 0.3, 0.06), clamp(seenW * 1.3, 0.0, 0.8));
-    gold = mix(gold, vec3(0.7, 0.13, 0.008), clamp(seenB * 1.1 - 0.15, 0.0, 0.55));
-    // the fan itself, deepening with age
+    // the ground: pink-violet at the heart, violet, then deep blue outward; rings of colour travel out
+    float ring = 0.5 + 0.5 * sin(rl * 9.0 - uTime * 0.5 + 1.6 * snoise(rq * 1.4 + uTime * 0.04));
+    vec3 pink = vec3(0.95, 0.38, 0.92), violet = vec3(0.5, 0.15, 0.9), blue = vec3(0.07, 0.16, 0.8);
+    vec3 ground = mix(pink, violet, smoothstep(0.0, 0.55, rl + 0.15 * sin(uTime * 0.13)));
+    ground = mix(ground, blue, smoothstep(0.45, 1.05, rl + 0.15 * sin(uTime * 0.09 + 1.0)));
+    ground = mix(ground, mix(ground, vec3(0.25, 0.55, 1.0), 0.45), ring * 0.45);
+    ground *= 0.82 + 0.28 * ring;
+    ground *= 0.96 + 0.05 * snoise(rq * 60.0);
+    ground = mix(ground, vec3(0.3, 0.1, 0.75), clamp(seenW * 1.2, 0.0, 0.7));
+    ground = mix(ground, vec3(0.12, 0.03, 0.4), clamp(seenB * 1.1 - 0.15, 0.0, 0.55));
+    // the fans: violet at the young tips, deep indigo where old
     float tone = snoise(rq * 3.0) * 0.5 + snoise(rq * 9.0) * 0.25;
-    vec3 rust = vec3(0.3, 0.045, 0.003), deep = vec3(0.06, 0.005, 0.001);
+    vec3 tip = vec3(0.32, 0.08, 0.6), deep = vec3(0.03, 0.008, 0.09);
     float age = (1.0 - young) * smoothstep(0.25, 0.7, seenB + 0.12 * tone);
-    vec3 fan = mix(rust, deep, age * (0.86 + 0.14 * tone));
-    fan = mix(fan, rust, smoothstep(0.95, 0.4, rt.g) * 0.6);       // thin at the edges, so light comes through
-    vec3 rc = mix(gold, fan, seen * (0.97 - 0.2 * young));
-    // molten channels: white in the middle, contour lines of gold and rust at the banks
+    vec3 fan = mix(tip, deep, age * (0.86 + 0.14 * tone));
+    fan = mix(fan, tip, smoothstep(0.95, 0.4, rt.g) * 0.6);
+    vec3 rc = mix(ground, fan, seen * (0.97 - 0.2 * young));
+    // channels: cyan-white light running out along the trunks, banded violet and magenta
     float heat = chan * front * uGrowFade + 0.22 * chan * snoise(rq * 12.0 + vec2(uTime * 0.05, 0.0));
-    float flow = 0.85 + 0.15 * sin(ord * 30.0 - uTime * 0.8);
+    float flow = 0.8 + 0.2 * sin(ord * 30.0 - uTime * 0.9);
     float bank = smoothstep(0.08, 0.2, heat);
-    vec3 melt = mix(vec3(0.5, 0.12, 0.008), vec3(1.0, 0.5, 0.06), 0.5 + 0.5 * sin(heat * 21.0 + snoise(rq * 8.0) * 1.2));
-    melt = mix(melt, vec3(1.25, 1.12, 0.8), smoothstep(0.56, 0.82, heat) * flow);
+    vec3 melt = mix(vec3(0.35, 0.08, 0.75), vec3(0.95, 0.35, 0.95), 0.5 + 0.5 * sin(heat * 21.0 - uTime * 0.4 + snoise(rq * 8.0) * 1.2));
+    melt = mix(melt, vec3(0.75, 1.05, 1.25), smoothstep(0.56, 0.82, heat) * flow);
     rc = mix(rc, melt, bank);
-    rc += vec3(1.0, 0.5, 0.1) * rb.b * seenB * 0.25;               // and their light on the fan around them
+    rc += vec3(0.4, 0.5, 1.0) * rb.b * seenB * 0.25;
     float wrapR = (dot(N, L) + 0.9) / 1.9;
     rc *= 0.58 + 0.55 * wrapR;
-    emission += gold * (1.0 - seen) * 0.16 * uRoot;
-    rc += vec3(1.0, 0.42, 0.1) * pow(1.0 - NdV, 2.5) * 0.3;
+    emission += ground * (1.0 - seen) * 0.16 * uRoot;
+    rc += vec3(0.55, 0.3, 1.0) * pow(1.0 - NdV, 2.5) * 0.3;
     body = mix(body, rc, uRoot);
   }
 #endif
@@ -743,8 +753,8 @@ void main(){
   float snowA = 1.0;
 #ifdef G_SNOW
   if (uSnow > 0.002){
-    // ~2700 K tungsten: warm white, not sodium orange
-    vec3 lamp = vec3(1.0, 0.78, 0.56);
+    // an old street lamp: a warm yellow glow
+    vec3 lamp = vec3(1.0, 0.68, 0.26);
     float halo = exp(-r * r * 2.2);
     vec3 sc = lamp * (0.06 + 0.55 * halo + 0.35 * exp(-r * r * 9.0));
     // the finger stirs the air: flakes near it are carried round, then the swirl dies away
@@ -758,19 +768,21 @@ void main(){
       float fi = float(i);
       // 0: near (large, soft, out of focus), 1: mid (sharp), 2: far (tiny specks)
       float cells = fi == 0.0 ? 3.2 : fi == 1.0 ? 7.0 : 15.0;
-      float fall = fi == 0.0 ? 0.11 : fi == 1.0 ? 0.075 : 0.045;
+      float fall = fi == 0.0 ? 0.15 : fi == 1.0 ? 0.1 : 0.06;
       float size = fi == 0.0 ? 0.07 : fi == 1.0 ? 0.018 : 0.008;
       float soft = fi == 0.0 ? 0.6 : fi == 1.0 ? 0.25 : 0.45;
       float lev = fi == 0.0 ? 0.22 : fi == 1.0 ? 0.85 : 0.5;
       vec2 q = sq * cells;
       q.y += uTime * fall * cells;
-      q.x -= uSnowWind.x * cells * (1.2 - fi * 0.3);
+      q.x -= uSnowWind.x * cells * (1.2 - fi * 0.3) + q.y * (0.25 + 0.35 * uSnowWind.y); // blown on a slant
       vec2 cell = floor(q);
       float h = hash12(cell + fi * 31.0);
       // each flake rocks gently from side to side as it falls
       vec2 c = vec2(0.5) + 0.32 * (hash22(cell + fi * 7.0) - 0.5) * 2.0;
       c.x += 0.18 * sin(uTime * (0.4 + h * 0.5) + h * 30.0) * (1.0 + 2.0 * uSnowWind.y);
-      float dd = length(fract(q) - c) / cells;
+      vec2 fv = fract(q) - c;
+      fv.x /= 1.0 + (0.4 + 1.2 * uSnowWind.y) * (fi == 0.0 ? 0.4 : 1.0);   // streaked by the wind
+      float dd = length(fv) / cells;
       float f = (1.0 - smoothstep(size * (1.0 - soft), size, dd)) * step(fi == 0.0 ? 0.8 : fi == 1.0 ? 0.62 : 0.5, h);
       flakes += f * lev * (0.6 + 0.4 * fract(h * 17.0));
     }
@@ -791,39 +803,42 @@ void main(){
 #ifdef G_STARS
   if (uStars > 0.002){
     vec3 sd = uSkyRot * normalize(vDir);
-    vec3 skyC = mix(vec3(0.006, 0.01, 0.035), vec3(0.015, 0.025, 0.08), 0.5 + 0.5 * sd.y);
-    // the Milky Way: a soft band of haze across the ball at an angle, with dark lanes
+    // after a clear winter night photograph: near-black navy above, a faint violet glow low down
+    vec3 skyC = mix(vec3(0.022, 0.012, 0.04), vec3(0.0025, 0.003, 0.011), smoothstep(-0.9, 0.5, p.y));
+    // the Milky Way: only a breath of cool haze across the ball
     vec3 bandN = normalize(vec3(0.45, 0.75, 0.48));
     float bd = dot(sd, bandN);
     vec2 bq = vec2(dot(sd, normalize(cross(bandN, vec3(0.0, 0.0, 1.0)))), bd) * 3.0;
-    float band = exp(-bd * bd / 0.035) * (0.55 + 0.45 * fbm2(bq * 1.3));
-    band *= 1.0 - 0.55 * smoothstep(0.1, 0.5, fbm2(bq * 2.6 + 4.0)) * exp(-bd * bd / 0.01);
-    skyC += mix(vec3(0.32, 0.36, 0.55), vec3(0.6, 0.5, 0.42), smoothstep(0.3, 0.8, fbm2(bq * 0.8))) * band * 0.22;
-    // stars: one per cell of a grid around the sphere, if the cell has one
+    float band = exp(-bd * bd / 0.05) * (0.5 + 0.5 * fbm2(bq * 1.3));
+    skyC += vec3(0.16, 0.16, 0.3) * band * 0.08;
+    // stars: thousands of pinpoints, most tiny and blue-white, a few brighter, a rare warm one
     float starL = 0.0; vec3 starC = vec3(0.0);
-    for (int k = 0; k < 2; k++){
-      float K = k == 0 ? 34.0 : 11.0;
+    for (int k = 0; k < 3; k++){
+      float K = k == 0 ? 72.0 : k == 1 ? 30.0 : 12.0;
       vec3 g = sd * K;
       vec3 cell = floor(g);
       float h = hash12(cell.xy + cell.z * 17.31 + float(k) * 5.0);
-      vec3 jit = vec3(hash22(cell.xy + cell.z * 3.7), hash12(cell.yz + 2.0)) * 0.7 + 0.15;
+      vec3 jit = vec3(hash22(cell.xy + cell.z * 3.7 + float(k)), hash12(cell.yz + 2.0 + float(k))) * 0.7 + 0.15;
       vec3 spos = normalize((cell + jit) / K);
       float ang = acos(clamp(dot(sd, spos), -1.0, 1.0));
-      float bright = k == 0 ? fract(h * 41.0) : 0.6 + 0.4 * fract(h * 41.0);
-      float has = step(k == 0 ? 0.7 : 0.9, h);
-      float sz = (k == 0 ? 0.0028 : 0.005) * (0.6 + bright);
+      float bright = 0.35 + 0.65 * fract(h * 41.0);
+      float has = step(k == 0 ? 0.74 : k == 1 ? 0.84 : 0.94, h);
+      float sz = (k == 0 ? 0.0024 : k == 1 ? 0.003 : 0.004) * (0.7 + 0.5 * bright);
       // twinkle: slow and subtle, every star on its own timing
-      float tw = 0.78 + 0.22 * sin(uTime * (0.35 + fract(h * 13.0) * 0.9) + h * 80.0);
-      float s = has * exp(-ang * ang / (sz * sz)) * bright * tw * (k == 0 ? 0.7 : 1.6);
+      float tw = 0.75 + 0.25 * sin(uTime * (0.35 + fract(h * 13.0) * 0.9) + h * 80.0);
+      float core = exp(-ang * ang / (sz * sz));
+      float glow = k == 2 ? 0.12 * exp(-ang * ang / (sz * sz * 9.0)) : 0.0;  // the bright few bloom a little
+      float s = has * (core + glow) * bright * tw * (k == 0 ? 0.55 : k == 1 ? 1.0 : 2.0);
       starL += s;
-      vec3 tint = fract(h * 7.0) < 0.5 ? vec3(0.8, 0.88, 1.0) : vec3(1.0, 0.92, 0.8);
+      float tc = fract(h * 7.0);
+      vec3 tint = tc < 0.68 ? vec3(0.74, 0.84, 1.0) : tc < 0.93 ? vec3(1.0, 0.98, 0.96) : vec3(1.0, 0.72, 0.45);
       starC += tint * s;
     }
     vec3 sc = skyC + starC;
     sc += vec3(0.95, 0.97, 1.0) * meteor(p);
     // the glass: a cool rim and a crisp window reflection
-    sc += vec3(0.25, 0.35, 0.7) * pow(1.0 - NdV, 3.0) * 0.35;
-    sc += env(refl) * (0.04 + 0.5 * fres) + vec3(1.0) * 1.3 * pow(NdH, 500.0);
+    sc += vec3(0.2, 0.24, 0.5) * pow(1.0 - NdV, 3.0) * 0.25;
+    sc += env(refl) * 0.3 * fres * fres + vec3(1.0) * 0.15 * pow(NdH, 2000.0);   // glass, only at the rim and one pin of light
     emission += (starC + vec3(0.95, 0.97, 1.0) * meteor(p)) * 0.6 * uStars;
     body = mix(body, sc, uStars);
   }
@@ -922,6 +937,28 @@ void main(){
     glass = mix(glass, glass * 1.1 + vec3(0.03, 0.05, 0.07), clamp(seenB * 0.6, 0.0, 0.35)); // haze around the ferns
     // the crystals: white-blue, edges catching the sun, darker toward the deep cold
     float bright = ft.b / max(ft.g, 0.02);
+    // touching the glass: frost spreads out from the finger over a few seconds, then slowly fades
+    for (int i = 0; i < 4; i++){
+      vec4 tt = uFrostTouch[i];
+      if (tt.w < 0.0) continue;
+      float age = uTime - tt.w;
+      vec3 td = normalize(tt.xyz);
+      if (dot(td, d) < 0.2) continue;
+      vec2 tq = discMap(td);
+      if (td.z < 0.0) tq = mat2(0.36, -0.93, 0.93, 0.36) * tq;
+      vec2 rel = fq - tq;
+      float an = tt.w * 2.7;
+      // borrow a dense patch of the frost (the outer ring of the pattern), turned at random
+      vec2 ruv2 = mat2(cos(an), -sin(an), sin(an), cos(an)) * rel * 1.1 + 0.66 * vec2(cos(tt.w * 3.1), sin(tt.w * 3.1));
+      vec4 lt = texture2D(uFrostTex, ruv2 * 0.47 + 0.5);
+      float R = 0.42 * (1.0 - exp(-age / 3.5));
+      float dEff = length(rel) + 0.22 * lt.r / max(lt.g, 0.02) + 0.05 * snoise(rel * 9.0 + tt.w);
+      float life = 1.0 - smoothstep(35.0, 50.0, age);
+      float ls = smoothstep(R + 0.015, R - 0.015, dEff) * smoothstep(0.2, 0.6, lt.g) * life;
+      if (ls > seen){ bright = max(bright, lt.b / max(lt.g, 0.02)); }
+      seen = max(seen, ls);
+      seenB = max(seenB, ls * 0.6);
+    }
     vec3 ice = mix(vec3(0.45, 0.58, 0.76), vec3(0.97, 0.99, 1.0), bright) * (0.85 + 0.3 * smoothstep(0.8, 0.1, sd));
     ice += sun * 0.55 * bright;
     float spark = step(0.985, hash12(floor(fuv * 900.0))) * seen;

@@ -180,6 +180,7 @@ export class OrbScene {
     uSky: { value: 0 },
     uFrost: { value: 0 },
     uFrostTex: { value: null as THREE.Texture | null },
+    uFrostTouch: { value: Array.from({ length: 4 }, () => new THREE.Vector4(0, 0, 1, -1)) },
     uRootTex: { value: null as THREE.Texture | null },
     uSss: { value: 0 },
     uMatte: { value: 0 },
@@ -270,6 +271,7 @@ export class OrbScene {
   /** modelled scenes, built the first time each is chosen */
   private creatures = new Map<CreatureKey, Creature>();
   private crackIdx = 0;
+  private frostIdx = 0;
   private growT = 0;
   /** how fast it is tilting (rad/s), for light and water that lag behind */
   private spin = new THREE.Vector3();
@@ -636,6 +638,11 @@ export class OrbScene {
   }
 
   private poke(dir: THREE.Vector3, strength: number) {
+    // Frost on Window: the glass frosts over where it is touched
+    if (this.gen.frost > 0.5 && strength > 0.8) {
+      this.U.uFrostTouch.value[this.frostIdx].set(dir.x, dir.y, dir.z, this.patternTime);
+      this.frostIdx = (this.frostIdx + 1) % this.U.uFrostTouch.value.length;
+    }
     // Lamplight Snow: the finger stirs the air; the flakes swirl round it
     if (this.gen.snow > 0.3) {
       const sp = this.screenOf(dir);
@@ -1114,11 +1121,11 @@ export class OrbScene {
       this.gustT += dt;
       if (this.gustT > this.gustAt) {
         this.gustT = 0;
-        this.gustAt = 20 + Math.random() * 20;
+        this.gustAt = 8 + Math.random() * 10;
       }
       const gw = Math.max(0, Math.sin(Math.min(1, this.gustT / 6) * Math.PI)) * (this.gustT < 6 ? 1 : 0);
       this.gust = damp(this.gust, gw, 1.2, dt);
-      this.snowWind += dt * this.pace * (0.012 + 0.05 * this.gust) * (reduced ? 0.5 : 1);
+      this.snowWind += dt * this.pace * (0.05 + 0.12 * this.gust) * (reduced ? 0.5 : 1);
       U.uSnowWind.value.set(this.snowWind, this.gust);
       this.swirl.z = damp(this.swirl.z, 0, 0.6, dt); // the air settles back slowly
       U.uSwirl.value.set(this.swirl.x, this.swirl.y, this.swirl.z, 0);

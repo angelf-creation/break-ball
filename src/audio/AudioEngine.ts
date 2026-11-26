@@ -562,6 +562,33 @@ export class AudioEngine {
         o.stop(t + d + 0.3);
         break;
       }
+      case 'sparkle': {
+        // a short run of little bells down (or up) a pentatonic scale, each a touch quieter
+        const n = Math.max(3, Math.round(tw(v.count)));
+        const up = Math.random() < 0.3;
+        let k = up ? 0 : v.notes.length - 1;
+        for (let i = 0; i < n; i++) {
+          const ti = t + i * v.gap * rnd(0.75, 1.3);
+          const f = v.notes[Math.max(0, Math.min(v.notes.length - 1, k))];
+          k += (up ? 1 : -1) * (Math.random() < 0.75 ? 1 : 2);
+          if (k < 0 || k >= v.notes.length) k = up ? 0 : v.notes.length - 1;
+          const a = v.amp * amp * (1 - (0.55 * i) / n) * rnd(0.7, 1);
+          for (const [ratio, lvl] of [[1, 1], [2.01, 0.18], [3.98, 0.05]] as const) {
+            const o = ctx.createOscillator();
+            o.type = 'sine';
+            o.frequency.value = f * ratio;
+            o.connect(this.env(ti, 0.002, v.decay * (ratio === 1 ? 1 : 0.5), a * lvl, out));
+            o.start(ti);
+            o.stop(ti + v.decay + 0.2);
+          }
+        }
+        // glitter: a faint high shimmer under the run
+        const sd = n * v.gap + 0.3;
+        this.burst(this.nb.white, t, sd)
+          .connect(this.filter('bandpass', 5200, 1.5))
+          .connect(this.env(t, sd * 0.3, sd * 0.7, v.amp * amp * 0.12, out));
+        break;
+      }
       case 'bell': {
         const f0 = pick(v.notes);
         for (const [ratio, a, d] of v.partials) {
@@ -628,10 +655,10 @@ export class AudioEngine {
         // fracture: a few tiny bright clicks, then a soft low settling
         const n = Math.max(1, Math.round(tw(v.ticks) * (1 - 0.5 * this.calm)));
         for (let i = 0; i < n; i++) {
-          const ti = t + (touch ? Math.random() * v.spread : 0) + i * 0.012;
+          const ti = t + (touch ? Math.random() * v.spread : 0) + i * rnd(0.008, 0.03);
           const dur = rnd(0.002, 0.006);
           this.burst(this.nb.white, ti, dur)
-            .connect(this.filter('bandpass', rnd(v.band[0], v.band[1]), 3))
+            .connect(this.filter('bandpass', rnd(v.band[0], v.band[1]), v.q ?? 3))
             .connect(this.env(ti, 0.001, dur, v.amp * amp * rnd(0.5, 1), out));
         }
         if (v.settle > 0) {

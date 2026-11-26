@@ -200,10 +200,13 @@ export const MATERIALS: MaterialPreset[] = [
     gen: { ...NONE, honey: 1 },
     physics: { rippleK: 6, rippleSpeed: 0.18, rippleDecay: 1.1, rippleAmp: 0.02, jelly: 0.75, fluid: 0.55, spring: 14 },
     sound: {
-      // warm, low and stretchy: a slow pull, nothing bright
-      bed: [{ kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 400 }, gain: 0.035, lfo: { target: 'gain', rate: 0.03, depth: 0.01 } }],
-      event: { voice: 'blob', notes: [174.61, 196, 220, 261.63], drop: 1.35, lowpass: 600, decay: 0.9, amp: 0.08, thud: 0.02 },
-      rate: 0.15,
+      // creamy and slow: a soft stir in the jar, and now and then a long, sticky pull
+      bed: [
+        { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 380 }, gain: 0.026, lfo: { target: 'gain', rate: 0.03, depth: 0.008 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 260, q: 0.8 }, gain: 0.012, lfo: { target: 'freq', rate: 0.06, depth: 60 } },
+      ],
+      event: { voice: 'swell', color: 'brown', dur: [1.3, 2.3], sweep: [160, 400, 150], amp: 0.075 },
+      rate: 0.12,
     },
   },
   {
@@ -327,15 +330,18 @@ export const MATERIALS: MaterialPreset[] = [
     },
   },
   {
-    id: 'root', label: 'Root', hint: 'Dark feathered roots spreading over golden light', group: 'organic', sessionSafe: true,
-    swatch: 'linear-gradient(135deg,#3a0d05,#f07a18,#ffe0a0)',
+    id: 'root', label: 'Psilocybin', hint: 'Violet and blue roots breathing and melting, like a mushroom trip', group: 'organic', sessionSafe: true,
+    swatch: 'linear-gradient(135deg,#1430c8,#7a2ad9 50%,#f06ae6)',
     gen: { ...NONE, root: 1, matte: 0.8 },
     physics: { rippleK: 12, rippleSpeed: 0.4, rippleDecay: 2, rippleAmp: 0.005, jelly: 0, fluid: 0 },
     sound: {
-      // near-silence: a faint rustle now and then
-      bed: [{ kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 450, q: 0.6 }, gain: 0.004 }],
-      event: { voice: 'hiss', band: [300, 600], dur: [0.35, 0.6], amp: 0.014 },
-      rate: 0.08,
+      // dreamy: two tones a breath apart, slowly beating, and a soft wash now and then
+      bed: [
+        { kind: 'tones', wave: 'sine', freqs: [220, 221.6, 329.63], levels: [1, 1, 0.3], filter: { type: 'lowpass', freq: 600 }, gain: 0.022, swell: { rate: 0.04, depth: 0.45 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 400, q: 1.2 }, gain: 0.006, lfo: { target: 'freq', rate: 0.05, depth: 150 } },
+      ],
+      event: { voice: 'swell', color: 'pink', dur: [2, 3.5], sweep: [200, 600, 180], amp: 0.03 },
+      rate: 0.06,
     },
   },
   {
@@ -371,26 +377,28 @@ export const MATERIALS: MaterialPreset[] = [
   },
   {
     // frost ferns spreading over a window, morning sun glowing through
-    id: 'frost', label: 'Frost on Window', hint: 'Frost ferns growing over a sunlit window', group: 'atmosphere', sessionSafe: true,
+    id: 'frost', label: 'Frost on Window', hint: 'Frost ferns over a sunlit window; touch the glass and frost grows there', group: 'atmosphere', sessionSafe: true,
     swatch: 'radial-gradient(circle at 40% 45%,#fff1d6,#b9cde4 35%,#5d7894 75%)',
     gen: { ...NONE, frost: 1, matte: 0.7 },
     physics: { rippleK: 16, rippleSpeed: 0.4, rippleDecay: 2.6, rippleAmp: 0.004, jelly: 0, fluid: 0 },
     sound: {
-      bed: [{ kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 580, q: 3 }, gain: 0.003, lfo: { target: 'gain', rate: 0.06, depth: 0.002 } }],
-      event: { voice: 'crackle', ticks: [4, 2], spread: 0.3, band: [400, 600], settle: 0.03, amp: 0.015 },
+      // almost silent cold; frost forming is dry, hard cracking, never a drip
+      bed: [{ kind: 'noise', color: 'white', filter: { type: 'bandpass', freq: 900, q: 0.7 }, gain: 0.0015 }],
+      event: { voice: 'crackle', ticks: [9, 3], spread: 0.4, band: [700, 2600], q: 0.9, settle: 0, amp: 0.035 },
       rate: 0.2,
     },
   },
   {
     // a quiet street at night: the orb is the lamp's warm halo, snow falling through it
-    id: 'snow', label: 'Lamplight Snow', hint: 'Snow falling through a street lamp at night; touch stirs the air', group: 'atmosphere', sessionSafe: true,
+    id: 'snow', label: 'Lamplight Snow', hint: 'Windblown snow under an old street lamp; touch stirs the air', group: 'atmosphere', sessionSafe: true,
     swatch: 'radial-gradient(circle,#fff1dc,#e8b27c 30%,#1a2238 70%,#05070d)',
     gen: { ...NONE, snow: 1, matte: 1 },
     physics: { rippleK: 1, rippleSpeed: 0.1, rippleDecay: 3, rippleAmp: 0, jelly: 0, fluid: 0 },
     sound: {
-      // fresh snow swallows sound: everything low, quiet and close
+      // a windy night, still muffled by the snow: low gusts, the hush, the lamp's faint hum
       bed: [
         { kind: 'noise', color: 'brown', filter: { type: 'lowpass', freq: 400, q: 0.3 }, gain: 0.03, lfo: { target: 'gain', rate: 0.04, depth: 0.01 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 340, q: 0.9 }, gain: 0.022, lfo: { target: 'gain', rate: 0.07, depth: 0.016 } },
         { kind: 'tones', wave: 'sine', freqs: [150, 300], levels: [1, 0.25], filter: { type: 'lowpass', freq: 350 }, gain: 0.004 },
       ],
       // a soft, muffled crunch
@@ -409,8 +417,8 @@ export const MATERIALS: MaterialPreset[] = [
         { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 420, q: 0.6 }, gain: 0.008, lfo: { target: 'gain', rate: 0.05, depth: 0.004 } },
         { kind: 'tones', wave: 'sine', freqs: [196, 293.66], levels: [1, 0.4], filter: { type: 'lowpass', freq: 400 }, gain: 0.018, swell: { rate: 0.02, depth: 0.3 } },
       ],
-      // a falling star: a soft glass-harmonica tone that fades with the streak
-      event: { voice: 'bell', notes: [392, 440, 523.25, 587.33], partials: [[1, 1, 2.6], [2, 0.1, 1.4], [3.01, 0.03, 0.8]], amp: 0.018 },
+      // a falling star: fairy glitter, a quick run of tiny bells that fades with the streak
+      event: { voice: 'sparkle', notes: [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51, 1567.98], count: [7, 6], gap: 0.07, decay: 0.9, amp: 0.022 },
       // falling stars are timed by the scene, which plays this voice; no extra ambient ones
       rate: 0.0001,
     },

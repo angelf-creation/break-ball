@@ -247,6 +247,7 @@ uniform vec3 uBleed;    // colour of the light the orb spills into the field
 uniform float uBleedAmt;
 uniform float uStudio;   // Pashgian: a soft studio sweep with a coloured cast shadow
 uniform vec4 uAura;       // light moving around the ball: xy = its offset, z = strength, w = held breath 0..1
+uniform vec2 uSnowWind;   // Lamplight Snow: x = how far the wind has carried the snow, y = gust now
 uniform vec2 uNight;      // night backdrop: x = how much, y = 0 snowy street .. 1 clear starry sky
 uniform vec4 uMeteor;     // falling star: xy = start (orb radii, screen-aligned), z = heading, w = progress 0..1
 uniform vec4 uMeteorB;    // x = path length, y = brightness, z = on
@@ -274,19 +275,79 @@ float meteor(vec2 q){
 vec3 nightColor(vec2 uv){
   vec2 o = (uv - uCenter) * vec2(uAspect, 1.0) / max(uOrbR, 1e-3);
   float y = uv.y;
-  vec3 street = mix(vec3(0.006, 0.009, 0.018), vec3(0.0015, 0.002, 0.005), smoothstep(0.0, 0.9, y));
-  street += vec3(0.012, 0.017, 0.026) * smoothstep(0.35, 0.0, y) * (0.8 + 0.2 * snoise(vec2(uv.x * 3.0 + uFieldTime * 0.02, y * 2.0)));
+  // an old street on a winter night: low snowy sky, dark gabled houses with a few lit
+  // windows, snow on the roofs and the ground, the lamp post and the pool of its light
+  vec3 lampC = vec3(1.0, 0.68, 0.26);
+  // a low snowy sky holds a little light near the rooftops, so the houses stand out against it
+  vec3 street = mix(vec3(0.013, 0.012, 0.015), vec3(0.0012, 0.0013, 0.0024), smoothstep(0.12, 0.8, y));
+  float gx = uv.x * uAspect;
+  float groundY = 0.13 + 0.008 * snoise(vec2(gx * 3.0, 2.0));
+  float bx = gx * 4.2, bi = floor(bx), bf = fract(bx);
+  float bh = 0.2 + 0.16 * hash12(vec2(bi, 3.0));
+  float gable = step(0.45, hash12(vec2(bi, 9.0))) * 0.07 * (1.0 - abs(bf - 0.5) * 2.0);
+  float roof = groundY + bh + gable;
+  float inB = step(y, roof) * step(groundY, y);
+  vec3 house = vec3(0.0006, 0.0006, 0.0009);
+  vec2 wq = vec2(bx * 3.0, (y - groundY) * 24.0);
+  vec2 wc = floor(wq), wf = fract(wq);
+  float win = step(0.88, hash12(wc + bi * 7.0)) * step(0.28, wf.x) * step(wf.x, 0.72) * step(0.3, wf.y) * step(wf.y, 0.8) * step(y, roof - 0.04) * step(groundY + 0.03, y);
+  house += vec3(1.0, 0.6, 0.22) * win * (0.03 + 0.015 * sin(uFieldTime * 0.3 + bi));
+  street = mix(street, house, inB);
+  street += vec3(0.035, 0.038, 0.05) * smoothstep(0.005, 0.0, abs(y - roof)) * step(groundY, y);   // snow along the roofs
+  // the lamp: its light spills into the air, onto the snow below, and down the post
   float od = length(o);
-  street += vec3(1.0, 0.74, 0.5) * (0.05 * exp(-max(od - 0.8, 0.0) * 2.2) + 0.008 * exp(-max(od - 0.8, 0.0) * 0.6));
-  vec3 sky = mix(vec3(0.01, 0.011, 0.03), vec3(0.0015, 0.002, 0.007), smoothstep(0.0, 0.85, y));
-  sky += vec3(0.018, 0.015, 0.028) * smoothstep(0.3, 0.0, y);
-  vec2 sp = uv * vec2(uAspect, 1.0) * 140.0;
-  vec2 cell = floor(sp);
-  vec2 fp = fract(sp) - 0.5 - 0.6 * (hash22(cell) - 0.5);
-  float h = hash12(cell + 11.0);
-  float st = step(0.965, h) * exp(-dot(fp, fp) * 40.0) * (0.25 + 0.75 * fract(h * 37.0));
-  st *= 0.75 + 0.25 * sin(uFieldTime * (0.5 + fract(h * 13.0)) + h * 60.0);
-  sky += vec3(0.8, 0.85, 1.0) * st * 0.35 * smoothstep(0.1, 0.5, y);
+  street += lampC * (0.045 * exp(-max(od - 0.8, 0.0) * 2.4) + 0.006 * exp(-max(od - 0.8, 0.0) * 0.6));
+  float px = (uv.x - uCenter.x) * uAspect;
+  float pool = exp(-px * px / sq(uOrbR * 1.6));
+  vec3 ground = vec3(0.006, 0.0075, 0.012) + lampC * 0.09 * pool;
+  ground *= 0.9 + 0.1 * snoise(vec2(gx * 40.0, y * 90.0));
+  street = mix(street, ground, step(y, groundY));
+  float postTop = uCenter.y - uOrbR * 0.92;
+  float post = step(abs(px), uOrbR * 0.03) * step(groundY - 0.01, y) * step(y, postTop);
+  vec3 postC = vec3(0.0015) + lampC * 0.06 * exp(-(postTop - y) / max(uOrbR * 0.5, 1e-3)) * smoothstep(-uOrbR * 0.03, uOrbR * 0.03, px);
+  street = mix(street, postC, post);
+  // windblown snow across the whole street, faint except near the lamp
+  vec2 sp2 = vec2(gx, y) * 22.0;
+  sp2.y += uFieldTime * 1.6;
+  sp2.x -= uSnowWind.x * 22.0 * 0.8 + sp2.y * 0.25 * (0.4 + uSnowWind.y);
+  vec2 sc2 = floor(sp2);
+  vec2 sf2 = fract(sp2) - 0.5 - 0.6 * (hash22(sc2 + 4.0) - 0.5);
+  float fl2 = step(0.8, hash12(sc2 + 21.0)) * exp(-dot(sf2, sf2) * 140.0);
+  float nearLamp = exp(-max(od - 1.0, 0.0) * 1.5);
+  street += mix(vec3(0.06, 0.065, 0.08), lampC, nearLamp) * fl2 * (0.04 + 0.3 * nearLamp);
+  // a clear winter night: near-black navy, a violet glow at the horizon, a dense field of
+  // tiny blue-white stars, and a dark treeline of firs and bare trees along the bottom
+  vec3 sky = mix(vec3(0.02, 0.011, 0.033), vec3(0.002, 0.0025, 0.009), smoothstep(0.05, 0.7, y));
+  float tx = uv.x * uAspect;
+  for (int k = 0; k < 2; k++){
+    float K = k == 0 ? 260.0 : 110.0;
+    vec2 sp = uv * vec2(uAspect, 1.0) * K;
+    vec2 cell = floor(sp);
+    vec2 fp = fract(sp) - 0.5 - 0.6 * (hash22(cell + float(k) * 3.0) - 0.5);
+    float h = hash12(cell + 11.0 + float(k) * 7.0);
+    float st = step(k == 0 ? 0.8 : 0.93, h) * exp(-dot(fp, fp) * (k == 0 ? 60.0 : 30.0)) * (0.3 + 0.7 * fract(h * 37.0));
+    st *= 0.72 + 0.28 * sin(uFieldTime * (0.4 + fract(h * 13.0)) + h * 60.0);
+    float tc = fract(h * 5.0);
+    vec3 tint = tc < 0.7 ? vec3(0.72, 0.82, 1.0) : tc < 0.94 ? vec3(1.0) : vec3(1.0, 0.75, 0.5);
+    sky += tint * st * (k == 0 ? 0.22 : 0.55) * smoothstep(0.08, 0.3, y);
+  }
+  // the treeline: firs of different heights, their sides built of drooping tiers of
+  // branches, over a low, uneven line of bare trees
+  float trees = 0.0;
+  float fw = 0.07, fc0 = floor(tx / fw);
+  for (int j = -1; j <= 1; j++){
+    float fi = fc0 + float(j);
+    if (hash12(vec2(fi, 5.0)) < 0.3) continue;
+    float cx = (fi + 0.3 + 0.4 * hash12(vec2(fi, 2.0))) * fw;
+    float base = 0.09, top = base + 0.06 + 0.12 * hash12(vec2(fi, 8.0));
+    float t = clamp((top - y) / (top - base + 0.02), 0.0, 1.0);          // 0 at the tip, 1 at the foot
+    float tiers = 0.75 + 0.25 * fract(t * (5.0 + 3.0 * hash12(vec2(fi, 4.0))));
+    float half_ = t * fw * 0.42 * tiers + 0.0015;
+    trees = max(trees, step(abs(tx - cx), half_) * step(y, top));
+  }
+  float bare = 0.085 + 0.035 * (0.5 + 0.5 * snoise(vec2(tx * 3.0, 1.3))) + 0.012 * snoise(vec2(tx * 26.0, 4.0)) + 0.006 * snoise(vec2(tx * 70.0, 9.0));
+  trees = max(trees, step(y, bare));
+  sky = mix(sky, vec3(0.0006, 0.0005, 0.0012), trees);
   sky += vec3(0.95, 0.97, 1.0) * meteor(o);
   return mix(street, sky, uNight.y);
 }
