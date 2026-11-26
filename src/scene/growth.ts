@@ -223,70 +223,16 @@ export function makeFrostTexture(size = 1536): THREE.CanvasTexture {
   return tex;
 }
 
-/**
- * Ferrofluid spike lattice: a Fibonacci sphere (close to the hexagonal packing a
- * Rosensweig field makes), baked as an equirect map. R = distance to the nearest
- * spike centre in units of 0.62 x spacing, G = that spike's size (0.75..1.25).
- */
-export function makeFerroTexture(n = 150, w = 768, h = 384): THREE.DataTexture {
-  const px = new Float32Array(n), py = new Float32Array(n), pz = new Float32Array(n), sz = new Float32Array(n), phase = new Float32Array(n);
-  const ga = Math.PI * (3 - Math.sqrt(5));
-  for (let i = 0; i < n; i++) {
-    const y = 1 - (2 * (i + 0.5)) / n, r = Math.sqrt(1 - y * y), a = i * ga;
-    px[i] = Math.cos(a) * r;
-    py[i] = y;
-    pz[i] = Math.sin(a) * r;
-    sz[i] = Math.random();
-    phase[i] = Math.random();
-  }
-  const spacing = Math.sqrt((4 * Math.PI) / n);
-  const reach = spacing * 0.62;
-  const data = new Uint8Array(w * h * 4);
-  for (let j = 0; j < h; j++) {
-    const th = ((j + 0.5) / h) * Math.PI;
-    const y = Math.cos(th), r = Math.sin(th);
-    // only points whose height is near this row can be nearest (y_i is linear in i)
-    const lo = Math.max(0, Math.floor(((1 - (y + spacing * 1.6)) * n) / 2 - 1));
-    const hi = Math.min(n - 1, Math.ceil(((1 - (y - spacing * 1.6)) * n) / 2 + 1));
-    for (let i = 0; i < w; i++) {
-      const ph = ((i + 0.5) / w - 0.5) * Math.PI * 2;
-      const x = Math.cos(ph) * r, z = Math.sin(ph) * r;
-      let best = -2, second = -2, bi = 0;
-      for (let k = lo; k <= hi; k++) {
-        const d = x * px[k] + y * py[k] + z * pz[k];
-        if (d > best) {
-          second = best;
-          best = d;
-          bi = k;
-        } else if (d > second) second = d;
-      }
-      const ang = Math.acos(Math.min(1, best));
-      const ang2 = Math.acos(Math.min(1, Math.max(-1, second)));
-      const o = (j * w + i) * 4;
-      data[o] = Math.round(Math.min(1, ang / reach) * 255);
-      data[o + 1] = Math.round(sz[bi] * 255);
-      // how far from the line where this spike's base meets its neighbour's (0 on it): ridges
-      data[o + 2] = Math.round(Math.min(1, (ang2 - ang) / reach) * 255);
-      // each spike's own phase, so neighbours rise and sink out of step
-      data[o + 3] = Math.round(phase[bi] * 255);
-    }
-  }
-  const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearFilter;
-  tex.needsUpdate = true;
-  return tex;
-}
 
 /**
- * Bubble Wrap: bubble centres on a Fibonacci lattice over the sphere (offset, honeycomb-like
- * rows, no seam and no pinching at the poles), plus an equirect map telling each point of the
- * sphere which bubble is nearest (R = index low byte, G = high byte). The shader measures the
- * exact distance to that centre itself, so the map can use nearest filtering.
+ * Points spread evenly over the sphere on a Fibonacci lattice (offset, honeycomb-like rows, no
+ * seam and no pinching at the poles), plus an equirect map telling each point of the sphere
+ * which lattice point is nearest (R = index low byte, G = high byte). Shaders look up the index
+ * and measure the exact distance to that centre themselves, so the map can use nearest
+ * filtering and the shapes built on it stay perfectly smooth. Used by Bubble Wrap (bubbles)
+ * and Ferrofluid (spikes).
  */
-export function makeWrapLattice(n = 460, w = 1024, h = 512) {
+export function makeSphereLattice(n: number, w = 1024, h = 512) {
   const centres = new Float32Array(n * 3);
   const ga = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < n; i++) {
@@ -324,7 +270,7 @@ export function makeWrapLattice(n = 460, w = 1024, h = 512) {
   map.wrapT = THREE.ClampToEdgeWrapping;
   map.magFilter = map.minFilter = THREE.NearestFilter;
   map.needsUpdate = true;
-  // per bubble: xyz = its centre, w = how inflated it is (updated by the scene as bubbles pop and refill)
+  // per point: xyz = its centre, w = a value the scene may animate (Bubble Wrap: how inflated)
   const state = new Float32Array(n * 4);
   for (let i = 0; i < n; i++) {
     state.set([centres[i * 3], centres[i * 3 + 1], centres[i * 3 + 2], 1], i * 4);
@@ -332,5 +278,5 @@ export function makeWrapLattice(n = 460, w = 1024, h = 512) {
   const tex = new THREE.DataTexture(state, n, 1, THREE.RGBAFormat, THREE.FloatType);
   tex.magFilter = tex.minFilter = THREE.NearestFilter;
   tex.needsUpdate = true;
-  return { map, tex, state, centres, n, radius: spacing * 0.48 };
+  return { map, tex, state, centres, n, spacing };
 }

@@ -71,7 +71,7 @@ export type VoiceSpec =
   | { voice: 'sparkle'; notes: number[]; count: Pair; gap: number; decay: number; amp: number }
   /** fracture ticks (tiny bright clicks) followed by a low settling (Ice) */
   | { voice: 'crackle'; ticks: Pair; spread: number; band: [number, number]; settle: number; amp: number; /** filter width: low = broad, hard cracks (default 3, narrow ticks) */ q?: number; /** seconds between ticks (default 0.008..0.03); even, slow spacing reads as a creak */ gap?: [number, number] }
-  /** bubble-wrap snap: a softened click, a small hollow body that drops in pitch, a crinkle after */
+  /** bubble-wrap pop: a soft rounded tick, a round hollow body that settles in pitch, a short crinkle */
   | { voice: 'snap'; body: [number, number]; amp: number }
   /** a distant bird: a few quick whistled notes, each a short pitch sweep */
   | { voice: 'chirp'; range: [number, number]; count: Pair; amp: number }

@@ -46,16 +46,22 @@ float fbm(vec2 p){
 
 /** Bubble Wrap lattice lookup, shared by the surface (domes) and the orb's shading. Needs nothing else. */
 export const WRAP = /* glsl */ `
+// a point on the sphere -> the nearest point of a Fibonacci lattice (scene/growth.ts
+// makeSphereLattice): the map gives its index, the table its exact centre (xyz) and a value (w)
+vec4 latticePoint(sampler2D map, sampler2D table, float n, vec3 d, out float idx){
+  vec2 uv = vec2(atan(d.z, d.x) / 6.2831853 + 0.5, acos(clamp(d.y, -1.0, 1.0)) / 3.14159265);
+  vec4 m = texture2D(map, uv);
+  idx = floor(m.r * 255.0 + 0.5) + floor(m.g * 255.0 + 0.5) * 256.0;
+  return texture2D(table, vec2((idx + 0.5) / n, 0.5));
+}
 uniform float uWrap;       // Bubble Wrap
-uniform sampler2D uWrapMap; // equirect: which bubble is nearest (R = index low byte, G = high byte)
+uniform sampler2D uWrapMap; // which bubble is nearest
 uniform sampler2D uWrapTex; // per bubble: xyz = centre, w = how inflated (0 popped .. 1, a little over 1 in the squash)
 uniform vec2 uWrapN;        // x = number of bubbles, y = bubble radius (radians)
 // the bubble nearest to a direction on the ball, and how far from its centre (1 = its edge)
 vec4 wrapBubble(vec3 d, out float rr){
-  vec2 uv = vec2(atan(d.z, d.x) / 6.2831853 + 0.5, acos(clamp(d.y, -1.0, 1.0)) / 3.14159265);
-  vec4 m = texture2D(uWrapMap, uv);
-  float idx = floor(m.r * 255.0 + 0.5) + floor(m.g * 255.0 + 0.5) * 256.0;
-  vec4 b = texture2D(uWrapTex, vec2((idx + 0.5) / uWrapN.x, 0.5));
+  float idx;
+  vec4 b = latticePoint(uWrapMap, uWrapTex, uWrapN.x, d, idx);
   rr = acos(clamp(dot(d, b.xyz), -1.0, 1.0)) / uWrapN.y;
   return b;
 }
@@ -85,10 +91,13 @@ uniform float uSquash;     // marshmallow: puffed and flattened top and bottom
 uniform vec3 uSonic;       // sound: x energy, y low energy, z tone 0..1
 uniform float uSonicT;     // its own slow clock
 uniform float uSonicAmt;   // how readily this material answers
-uniform vec4 uDent;        // pillow: xyz = where it is pressed, w = how deep
+uniform vec4 uDent;        // pillow, honey: xyz = where it is pressed, w = how deep
+uniform float uDentAmt;    // honey: how much of that dent shows (the pillow has its own, in uSquash)
 uniform float uFerro;      // ferrofluid: how far the spikes are raised (weight * field)
 uniform vec4 uFerroField;  // xyz = where the magnet is (object space), w = how focused it is
-uniform sampler2D uFerroTex; // equirect: R = distance to the nearest spike / spacing, G = its size, B = distance to the ridge line, A = its phase
+uniform sampler2D uFerroMap; // which spike is nearest (a sphere lattice, see WRAP)
+uniform sampler2D uFerroTex; // per spike: xyz = its centre
+uniform vec2 uFerroN;        // x = number of spikes, y = their spacing (radians)
 uniform vec4 uPull;       // Honey: xyz = where a thread is pulled from (object space), w = how hard
 ${WRAP}
 uniform float uWobble;     // soap bubble: the slow breathing jiggle of a floating film
@@ -160,29 +169,31 @@ float orbRipples(vec3 dir){
 // of peaks; surface tension rounds the troughs between them. Spike centres are a Fibonacci
 // lattice baked into uFerroTex. The magnet (a touch) makes the nearest peaks taller.
 float ferroHeight(vec3 dir){
-  vec2 uv = vec2(atan(dir.z, dir.x) / 6.2831853 + 0.5, acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265);
-  vec4 t = texture2D(uFerroTex, uv);
-  float d = clamp(t.r, 0.0, 1.0);
-  float near = pow(max(dot(dir, uFerroField.xyz), 0.0), 3.0);
-  float amp = mix(1.0, 0.3 + 1.25 * near, uFerroField.w) * (0.75 + 0.5 * t.g);
-  // after the reference video: each spike rises and sinks on its own beat, neighbours out of step,
-  // so the crown keeps shifting; where neighbours are low together they merge into one ridge
-  float own = sin(uFerroMotion.y + t.a * 6.2831853);
-  float spikeAmp = amp * (1.0 + uFerroMotion.z * own);
-  // concave flanks to a sharp tip; a shallow, smooth trough between neighbours
+  // the exact angle to the nearest spike's centre (not read from a filtered texture: that made
+  // the height piecewise-linear between texels, so the finite-difference normals sparkled)
+  float idx;
+  vec4 c = latticePoint(uFerroMap, uFerroTex, uFerroN.x, dir, idx);
+  float d = clamp(acos(clamp(dot(dir, c.xyz), -1.0, 1.0)) / (uFerroN.y * 0.47), 0.0, 1.0);
+  float size = hash12(vec2(idx, 3.1)), phase = hash12(vec2(idx, 7.7));
+  // per spike, so each spike grows as one piece toward the magnet
+  float near = pow(max(dot(c.xyz, uFerroField.xyz), 0.0), 3.0);
+  float amp = mix(1.0, 0.3 + 1.25 * near, uFerroField.w) * (0.75 + 0.5 * size);
+  // after the reference video: each spike rises and sinks on its own slow beat, out of step
+  float own = sin(uFerroMotion.y + phase * 6.2831853);
+  amp *= 1.0 + uFerroMotion.z * own;
+  // every shape below reaches exactly zero, with zero slope, before the cell's edge, so
+  // neighbouring spikes always meet on the same smooth trough
   float spike = 0.2 * pow(1.0 - d, 2.4);
-  // the first stage (and the low moments): broad humps whose bases run together along the ridge lines
-  // (the ridge is shared by both neighbours, so it must not use either one's own phase: no crease)
-  float ridge = (1.0 - smoothstep(0.0, 0.5, t.b)) * smoothstep(1.0, 0.45, d) * 0.03 * (1.0 - 0.75 * uFerroMotion.x);
-  float hump = 0.055 * smoothstep(1.0, 0.1, d);
-  float sharp = clamp(uFerroMotion.x * (0.8 + 0.35 * own), 0.0, 1.0);
-  return uFerro * (spikeAmp * mix(hump, spike, sharp) + amp * ridge - 0.014 * amp);
+  float hump = 0.06 * sq(1.0 - d * d);
+  float sharp = clamp(uFerroMotion.x * (0.85 + 0.25 * own), 0.0, 1.0);
+  return uFerro * (amp * mix(hump, spike, sharp) - 0.014);
 }
 
 // Radial displacement as a fraction of the radius.
 float orbDisp(vec3 dir){
   float h = orbForm(dir) + orbRipples(dir);
   if (uSquash > 0.002) h += uSquash * (cushionShape(dir) + dentShape(dir));
+  if (uDentAmt > 0.002) h += uDentAmt * dentShape(dir);
   // jelly: spring offset pushes one side in and squashes the other axis (squared, so it passes
   // through rest smoothly: a plain length has a sharp corner there)
   h += (dot(dir.xy, uJelly) * 0.5 + dot(uJelly, uJelly) * 1.5 * (dir.z * dir.z - 0.33)) * uJellyAmt;
@@ -194,11 +205,17 @@ float orbDisp(vec3 dir){
     float w2 = cos(az * 6.0) * sin(th * 9.0) * sin(uSonicT * 0.6);
     h += uSonicAmt * uSonic.x * 0.0065 * (mix(w1, w1 * 0.6 + w2, uSonic.z)) * smoothstep(0.05, 0.4, th);
   }
-  // Bubble Wrap: each bubble a low dome, flattened once popped
+  // Bubble Wrap: a puffy bag. Squashed a little front to back, sealed top and bottom in flat
+  // pressed seams; each bubble a low dome, sunk into a hollow once popped
   if (uWrap > 0.002){
     float rr;
     vec4 b = wrapBubble(dir, rr);
-    h += uWrap * 0.03 * clamp(b.w, 0.0, 1.2) * sqrt(max(1.0 - rr * rr, 0.0));
+    float ay = abs(dir.y);
+    float seam = smoothstep(0.7, 0.76, ay);
+    float cap = sqrt(max(1.0 - rr * rr, 0.0)) * (1.0 - seam);
+    float inf = clamp(b.w, 0.0, 1.2);
+    h += uWrap * (0.03 * inf * cap - 0.035 * (1.0 - min(inf, 1.0)) * cap);
+    h += uWrap * (-0.08 * dir.z * dir.z + 0.03 * dir.x * dir.x - 0.025 * exp(-sq((ay - 0.78) / 0.04)) - 0.03 * smoothstep(0.8, 0.97, ay));
   }
   // Honey: the surface is drawn up toward a thread being pulled out of it
   if (uPull.w > 0.002){

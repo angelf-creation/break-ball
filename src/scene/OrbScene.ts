@@ -14,7 +14,7 @@ import { breathAt, sessionElapsed } from '../time/breath';
 import { soundLevel } from '../audio/level';
 import { VideoSource, VIDEO_DISC } from './videoSource';
 import { InkSim } from './inkSim';
-import { makeFerroTexture, makeFrostTexture, makeRootTexture, makeWrapLattice } from './growth';
+import { makeFrostTexture, makeRootTexture, makeSphereLattice } from './growth';
 import { buildCreature, CREATURE_KEYS, type Creature, type CreatureKey } from './creatures';
 import { orbVertex, orbFragment } from './shaders/orb';
 import {
@@ -23,6 +23,15 @@ import {
 
 const damp = (cur: number, target: number, rate: number, dt: number) =>
   cur + (target - cur) * (1 - Math.exp(-rate * dt));
+/** a damped spring toward target: w = how quick (rad/s), zeta 1 = critically damped, < 1 = one soft overshoot */
+const springTo = (s: { x: number; v: number }, target: number, w: number, zeta: number, dt: number) => {
+  const n = Math.max(1, Math.ceil(dt / 0.008));
+  const h = dt / n;
+  for (let i = 0; i < n; i++) {
+    s.v += (-2 * zeta * w * s.v - w * w * (s.x - target)) * h;
+    s.x += s.v * h;
+  }
+};
 
 const FORM_KEYS = Object.keys(ARTIST_BY_ID.default.form) as (keyof ArtistForm)[];
 const BASE_R = 1.4;
@@ -160,6 +169,7 @@ export class OrbScene {
     uSonicAmt: { value: 1 },
     uArtTint: { value: 0 },
     uDent: { value: new THREE.Vector4(0, 0, 1, 0) },
+    uDentAmt: { value: 0 },
     uAura: { value: new THREE.Vector4() },
     uGrow: { value: 0 },
     uGrowFade: { value: 1 },
@@ -168,6 +178,7 @@ export class OrbScene {
     uRoot: { value: 0 },
     uBubble: { value: 0 },
     uBubbleTouch: { value: new THREE.Vector4(0, 0, 1, 0) },
+    uOilTouch: { value: Array.from({ length: 4 }, () => new THREE.Vector4(0, 0, 1, -1)) },
     uWobble: { value: 0 },
     uHoneyBub: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, -1)) },
     uHoneyT: { value: 0 },
@@ -185,6 +196,8 @@ export class OrbScene {
     uWrapTex: { value: null as THREE.Texture | null },
     uWrapN: { value: new THREE.Vector2(1, 0.1) },
     uSun: { value: new THREE.Vector4(0, 0.6, 0.5, 0.4) },
+    uSkyTrail: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, 0, 0)) },
+    uSunBoost: { value: 0 },
     uThreadA: { value: new THREE.Vector4() },
     uThreadB: { value: new THREE.Vector4() },
     uPull: { value: new THREE.Vector4(0, 0, 1, 0) },
@@ -200,7 +213,9 @@ export class OrbScene {
     uFerroLook: { value: 0 },
     uFerroField: { value: new THREE.Vector4(0, 0, 1, 0) },
     uFerroMotion: { value: new THREE.Vector3(0.88, 0, 0.18) },
+    uFerroMap: { value: null as THREE.Texture | null },
     uFerroTex: { value: null as THREE.Texture | null },
+    uFerroN: { value: new THREE.Vector2(1, 0.3) },
     uSky: { value: 0 },
     uFrost: { value: 0 },
     uFrostTex: { value: null as THREE.Texture | null },
@@ -319,7 +334,7 @@ export class OrbScene {
   private openT = 0;
   private rootTex: THREE.Texture | null = null;
   private frostTex: THREE.Texture | null = null;
-  private ferroTex: THREE.Texture | null = null;
+  private ferroL: ReturnType<typeof makeSphereLattice> | null = null;
   /** ferrofluid: the magnet (a held touch) and how strongly the field lifts the liquid */
   private ferroAmp = 0;
   private ferroFocus = 0;
@@ -371,7 +386,8 @@ export class OrbScene {
   private breathWarm = new THREE.Color(1.0, 0.5, 0.22);
   private breathCool = new THREE.Color(0.22, 0.48, 1.0);
   /** Bubble Wrap: the lattice, and per bubble its phase (0 inflated, 1 popping, 2 waiting, 3 refilling) and clock */
-  private wrapL: ReturnType<typeof makeWrapLattice> | null = null;
+  private wrapL: ReturnType<typeof makeSphereLattice> | null = null;
+  private wrapR = 0.1;
   private wrapPhase = new Uint8Array(0);
   private wrapClock = new Float32Array(0);
   private wrapWait = new Float32Array(0);
@@ -390,7 +406,7 @@ export class OrbScene {
         bi = i;
       }
     }
-    if (bi < 0 || Math.acos(Math.min(1, best)) > L.radius * 1.05) return false;
+    if (bi < 0 || Math.acos(Math.min(1, best)) > this.wrapR * 1.05) return false;
     const ph = this.wrapPhase[bi];
     // a refilling bubble only pops once it is at least 80 % back
     if (ph === 1 || ph === 2 || (ph === 3 && L.state[bi * 4 + 3] < 0.8)) return false;
@@ -414,7 +430,7 @@ export class OrbScene {
       return;
     }
     const ang = from.angleTo(to);
-    const steps = Math.min(40, Math.ceil(ang / (this.wrapL.radius * 0.6)));
+    const steps = Math.min(40, Math.ceil(ang / (this.wrapR * 0.6)));
     const p = new THREE.Vector3();
     for (let i = 1; i <= steps; i++) {
       p.copy(from).lerp(to, i / steps).normalize();
@@ -489,11 +505,16 @@ export class OrbScene {
     const inv = this.group.quaternion.clone().invert();
     U.uCamObj.value.copy(this.camera.position).sub(this.group.position).applyQuaternion(inv).divideScalar(BASE_R * this.group.scale.x);
   }
+  /** honey: its dent, on a soft underdamped spring */
+  private honeyDentS = { x: 0, v: 0 };
   /** soap bubble: how stirred the film is where it was last touched, and how far the bands have turned */
   private bubbleStir = 0;
+  private oilIdx = 0;
   private bubbleTwist = 0;
   /** ferrofluid motion: broad humps (0) .. sharp spikes (1), the spikes' sway clock, how fast it runs, how far they sway */
-  private ferroSharp = 0.88;
+  private ferroAmpS = { x: 0, v: 0 };
+  private ferroSharpS = { x: 0.88, v: 0 };
+  private ferroFocusS = { x: 0.2, v: 0 };
   private ferroSwayT = 0;
   private ferroSwayW = 0.9;
   private ferroSwayAmt = 0.18;
@@ -510,6 +531,11 @@ export class OrbScene {
   private sunEl = 20;
   private sunDir = new THREE.Vector3(0, 0.6, 0.5);
   private birdAt = 20;
+  /** Sky: the next trail slot, the sun's brightening (spring), how hard the breeze blows from dragging */
+  private skyTrailIdx = 0;
+  private sunBoostS = { x: 0, v: 0 };
+  private skyGust = 0;
+  private skyDriveAt = 0;
   /** Starfall: the falling star in flight (one at a time), and when the next is due */
   private meteorT = -1;
   private meteorDur = 0.6;
@@ -877,6 +903,9 @@ export class OrbScene {
         this.wrapLastHit = dir.clone();
         this.wrapPop(dir);
       }
+      // the whole bag squishes softly under the hand
+      this.jellyPush.x = Math.max(-3.5, Math.min(3.5, this.jellyPush.x - dir.x * 1.4 * strength));
+      this.jellyPush.y = Math.max(-3.5, Math.min(3.5, this.jellyPush.y - dir.y * 1.4 * strength));
       this.video.resumeOnGesture();
       return;
     }
@@ -888,6 +917,7 @@ export class OrbScene {
     // Honey: a touch lets air bubbles go; they rise slowly through the gold
     if (this.gen.honey > 0.5) {
       const sp = this.screenOf(dir);
+      this.honeyDentS.v += 2.2 * strength;                                // a touch pushes the dent in
       if (strength > 0.8) {
         const n = 1 + Math.floor(Math.random() * 3);
         for (let i = 0; i < n; i++) this.spawnHoneyBubble(sp.x + (Math.random() - 0.5) * 0.14, sp.y - 0.04 - Math.random() * 0.12, 0.02 + Math.random() * 0.045);
@@ -898,6 +928,15 @@ export class OrbScene {
       const bt = this.U.uBubbleTouch.value;
       if (this.bubbleTwist * this.bubbleTwist < 0.5) bt.set(dir.x, dir.y, dir.z, this.bubbleTwist);
       this.bubbleStir = Math.min(2, this.bubbleStir + 0.9 * strength);
+      // an oil sheen spreads from here (drags leave a trail of them behind the finger)
+      this.U.uOilTouch.value[this.oilIdx].set(dir.x, dir.y, dir.z, this.patternTime);
+      this.oilIdx = (this.oilIdx + 1) % 4;
+    }
+    // Sky: the finger parts the clouds where it passes; they drift back together over seconds
+    if (this.gen.sky > 0.3) {
+      const sp = this.screenOf(dir);
+      this.U.uSkyTrail.value[this.skyTrailIdx].set(sp.x, sp.y, Math.min(1, 0.45 + 0.5 * strength), 0);
+      this.skyTrailIdx = (this.skyTrailIdx + 1) % 6;
     }
     // Snowstorm: the finger stirs the air; the flakes swirl softly round it (Sky: wisps curl)
     if (this.gen.snow > 0.3 || this.gen.sky > 0.3) {
@@ -990,6 +1029,7 @@ export class OrbScene {
     this.idle = 0;
     // Honey resists: the ball turns less, and the thread's end follows the finger anywhere
     this.turn(dx * (1 - 0.6 * this.gen.honey), dy * (1 - 0.6 * this.gen.honey));
+    if (this.gen.sky > 0.5) this.skyGust = Math.min(1, this.skyGust + Math.hypot(dx, dy) / dtm * 0.02);
     if (this.gen.snow > 0.5) this.snowPush = Math.max(-0.06, Math.min(0.06, this.snowPush + dx * 0.05));
     if (this.gen.ink > 0.5 && this.ink && d.onBall) {
       // stirring: the water follows the finger, curling into eddies behind it
@@ -1306,7 +1346,11 @@ export class OrbScene {
     const glow = Math.min(0.9, this.openGlow + this.sessionW * (0.1 + 0.1 * this.breath));
     // the pillow's hollow: sinks quickly under the hand, fills out slowly
     this.dent = damp(this.dent, this.pressed ? 1 : 0, this.pressed ? 6 : 0.9, dt);
-    U.uDent.value.w = Math.max(this.dent, Math.min(1, this.disperse * 0.5) * (this.pressed ? 1 : 0.4));
+    // honey: a deep, soft dent that wobbles back like jelly (underdamped, ~1.5-2 s to settle)
+    springTo(this.honeyDentS, this.pressed ? 0.9 : 0, 3.2, 0.3, dt);
+    const pillowDent = Math.max(this.dent, Math.min(1, this.disperse * 0.5) * (this.pressed ? 1 : 0.4));
+    U.uDent.value.w = pillowDent + (this.honeyDentS.x - pillowDent) * Math.min(1, this.gen.honey);
+    U.uDentAmt.value = this.gen.honey * 0.85;
 
     // sound: what is heard becomes slow waves and shimmer. Silent, it keeps a faint pulse of
     // its own, so it is never dead; reduced motion keeps it fainter still.
@@ -1448,13 +1492,14 @@ export class OrbScene {
     U.uWrap.value = g.wrap;
     if (g.wrap > 0.001) {
       if (!this.wrapL) {
-        this.wrapL = makeWrapLattice();
+        this.wrapL = makeSphereLattice(460);
+        this.wrapR = this.wrapL.spacing * 0.48;
         this.disposables.push(this.wrapL.map, this.wrapL.tex);
         const n = this.wrapL.n;
         this.wrapPhase = new Uint8Array(n);
         this.wrapClock = new Float32Array(n);
         this.wrapWait = new Float32Array(n);
-        U.uWrapN.value.set(n, this.wrapL.radius);
+        U.uWrapN.value.set(n, this.wrapR);
       }
       U.uWrapMap.value = this.wrapL.map;
       U.uWrapTex.value = this.wrapL.tex;
@@ -1508,7 +1553,7 @@ export class OrbScene {
       this.bubbleTwist *= Math.exp(-dt * 0.8);
       U.uBubbleTouch.value.w = this.bubbleTwist;
     }
-    U.uWobble.value = g.bubble * (reduced ? 0.4 : 1);
+    U.uWobble.value = (g.bubble + 1.5 * g.honey) * (reduced ? 0.4 : 1); // honey breathes and jiggles as a whole
     U.uSnow.value = g.snow;
     U.uStars.value = g.stars;
     if (g.snow > 0.001) {
@@ -1538,6 +1583,17 @@ export class OrbScene {
       const er = (el * Math.PI) / 180;
       this.sunDir.set(Math.sin(ha * 0.9) * Math.cos(er), Math.sin(er), Math.cos(ha * 0.9) * Math.cos(er)).normalize();
       U.uSun.value.set(this.sunDir.x, this.sunDir.y, this.sunDir.z, el / 90);
+      // the cloud parting fades as they drift back; holding clears the sun a little
+      for (const tr of U.uSkyTrail.value) tr.z *= Math.exp(-dt / 2.5);
+      springTo(this.sunBoostS, this.pressed && g.sky > 0.5 ? 1 : 0, 1.4, 1, dt);
+      U.uSunBoost.value = Math.max(0, this.sunBoostS.x);
+      // the breeze swells with how fast the finger drags
+      this.skyGust = damp(this.skyGust, 0, 0.8, dt);
+      this.skyDriveAt -= dt;
+      if (this.skyDriveAt <= 0 && g.sky > 0.5) {
+        this.skyDriveAt = 0.25;
+        this.opts.onDrive?.('wind', 0.25 + 0.75 * this.skyGust);
+      }
       // very occasionally, distant birdsong, in daylight only
       this.birdAt -= dt;
       if (this.birdAt <= 0) {
@@ -1647,28 +1703,33 @@ export class OrbScene {
     // ferrofluid: the field rises slowly while a touch is held there and settles when let go
     // (critically damped, never a snap); in a session it swells with the breath
     if (g.ferro > 0.001) {
-      if (!this.ferroTex) {
-        this.ferroTex = makeFerroTexture();
-        this.disposables.push(this.ferroTex);
+      if (!this.ferroL) {
+        this.ferroL = makeSphereLattice(150, 1024, 512);
+        this.disposables.push(this.ferroL.map, this.ferroL.tex);
+        U.uFerroN.value.set(this.ferroL.n, this.ferroL.spacing);
       }
+      U.uFerroMap.value = this.ferroL.map;
+      U.uFerroTex.value = this.ferroL.tex;
       const held = this.pressed ? 1 : 0;
       const breathe = this.sessionW * (this.breath - 0.5) * 0.35;
-      // timed from the reference video, played about 35 % slower: a held touch lifts the field in
-      // about half a second, ridges first, then they sharpen into spikes; the spikes then rise and
-      // sink out of step (about every 1.9 s while held, a slow ~7 s drift at rest)
-      this.ferroAmp = damp(this.ferroAmp, 0.62 + 0.38 * held + breathe, held ? 5 : 0.9, dt);
-      this.ferroSharp = damp(this.ferroSharp, held ? 1 : 0.88, held ? 3.2 : 0.8, dt);
+      // timed from the reference video, played about 35 % slower. Every level moves on a
+      // critically damped spring, so spikes ease in and out and never flick: a held touch lifts
+      // the field (ridges first, then they sharpen into spikes) and releasing lets it sink slowly
+      springTo(this.ferroAmpS, 0.62 + 0.38 * held + breathe, held ? 4.5 : 1.6, 1, dt);
+      springTo(this.ferroSharpS, held ? 1 : 0.88, held ? 3 : 1.2, 1, dt);
+      springTo(this.ferroFocusS, held ? 1 : 0.2, held ? 3.5 : 1.2, 1, dt);
+      this.ferroAmp = this.ferroAmpS.x;
+      this.ferroFocus = this.ferroFocusS.x;
       this.ferroSwayW = damp(this.ferroSwayW, held ? 3.4 : 0.9, held ? 2.5 : 0.6, dt);
       this.ferroSwayAmt = damp(this.ferroSwayAmt, held ? 0.3 : 0.18, 1.2, dt);
       this.ferroSwayT += dt * this.ferroSwayW * this.pace * (reduced ? 0.5 : 1);
-      U.uFerroMotion.value.set(this.ferroSharp, this.ferroSwayT, this.ferroSwayAmt * (reduced ? 0.5 : 1));
-      this.ferroFocus = damp(this.ferroFocus, held ? 1 : 0.2, held ? 1.8 : 0.7, dt);
+      U.uFerroMotion.value.set(this.ferroSharpS.x, this.ferroSwayT, this.ferroSwayAmt * (reduced ? 0.5 : 1));
+      // the magnet follows the finger while it is held
       const p = U.uPoke.value as THREE.Vector3;
       const want = held && p.y < 5 ? p : U.uFront.value;
       this.ferroDir.lerp(want, 1 - Math.exp(-dt * (held ? 3 : 0.8))).normalize();
       U.uFerroField.value.set(this.ferroDir.x, this.ferroDir.y, this.ferroDir.z, this.ferroFocus);
     }
-    U.uFerroTex.value = this.ferroTex;
     U.uFerro.value = g.ferro * this.ferroAmp;
     U.uSss.value = g.sss;
     U.uMatte.value = g.matte;

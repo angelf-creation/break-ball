@@ -702,29 +702,31 @@ export class AudioEngine {
         this.snaps = this.snaps.filter((x) => x > now);
         if (this.snaps.length >= 8) break;
         this.snaps.push(t + 0.12);
-        const a = v.amp * amp * rnd(0.75, 1.1);
-        // the click: a 2 ms burst, the very top rolled off so fast popping never gets piercing
-        this.burst(this.nb.white, t, 0.003)
-          .connect(this.filter('highpass', 900))
-          .connect(this.filter('lowpass', 3800))
-          .connect(this.env(t, 0.0008, 0.012, a * 0.9, out));
-        // the hollow "puk"
+        const a = v.amp * amp * rnd(0.85, 1.05);
+        // a soft pop: no sharp click peak, just a rounded tick (attack eased, top end rolled off)
+        this.burst(this.nb.white, t, 0.004)
+          .connect(this.filter('bandpass', 1400, 0.9))
+          .connect(this.filter('lowpass', 2400))
+          .connect(this.env(t, 0.0025, 0.014, a * 0.45, out));
+        // the round "puk": a soft sine that settles a little in pitch
         const f = rnd(v.body[0], v.body[1]);
         const o = ctx.createOscillator();
         o.type = 'sine';
-        o.frequency.setValueAtTime(f * 1.5, t);
-        o.frequency.exponentialRampToValueAtTime(f, t + 0.02);
-        o.connect(this.env(t, 0.001, 0.05, a * 0.8, out));
+        o.frequency.setValueAtTime(f * 1.18, t);
+        o.frequency.exponentialRampToValueAtTime(f, t + 0.03);
+        o.connect(this.env(t, 0.003, 0.08, a * 0.85, out));
         o.start(t);
-        o.stop(t + 0.1);
-        const nb = this.burst(this.nb.pink, t, 0.04);
-        nb.connect(this.filter('bandpass', f * 1.2, 3)).connect(this.env(t, 0.001, 0.035, a * 0.5, out));
-        // a tiny crinkle of plastic right after
-        for (let i = 0; i < 3; i++) {
-          const ti = t + 0.02 + i * rnd(0.01, 0.025);
+        o.stop(t + 0.14);
+        this.burst(this.nb.pink, t, 0.05)
+          .connect(this.filter('bandpass', f * 1.1, 2))
+          .connect(this.filter('lowpass', 1800))
+          .connect(this.env(t, 0.003, 0.04, a * 0.3, out));
+        // a short, soft crinkle tail
+        for (let i = 0; i < 2; i++) {
+          const ti = t + 0.025 + i * rnd(0.012, 0.022);
           this.burst(this.nb.white, ti, 0.004)
-            .connect(this.filter('bandpass', rnd(1500, 3200), 2))
-            .connect(this.env(ti, 0.001, 0.006, a * 0.12, out));
+            .connect(this.filter('bandpass', rnd(1400, 2400), 1.5))
+            .connect(this.env(ti, 0.002, 0.008, a * 0.06, out));
         }
         break;
       }

@@ -170,7 +170,7 @@ export const MATERIALS: MaterialPreset[] = [
     id: 'bubble', label: 'Soap Bubble', hint: 'A floating soap film, colour bands flowing as it drains; touch it and it dents and wobbles', group: 'glass', sessionSafe: true,
     swatch: 'radial-gradient(circle at 40% 35%,#ffcf6a,#d43ad6 35%,#2e7bff 60%,#0a0612 85%)',
     gen: { ...NONE, bubble: 1 },
-    physics: { rippleK: 7, rippleSpeed: 0.45, rippleDecay: 1.1, rippleAmp: 0.034, jelly: 0.85, fluid: 0.2, spring: 18 },
+    physics: { rippleK: 10, rippleSpeed: 0.7, rippleDecay: 1.6, rippleAmp: 0.026, jelly: 0.7, fluid: 0.2, spring: 22 },
     sound: {
       // airy micro-shimmer; a touch is a soft, wet tick, never a pop
       bed: [
@@ -186,7 +186,7 @@ export const MATERIALS: MaterialPreset[] = [
     id: 'honey', label: 'Honey', hint: 'Clear golden honey; drag to pull sticky threads, touch to let bubbles rise', group: 'glass', sessionSafe: true,
     swatch: 'radial-gradient(circle at 40% 35%,#fff3b0,#ffc22e 35%,#d97a06 70%,#5a2402)',
     gen: { ...NONE, honey: 1 },
-    physics: { rippleK: 5, rippleSpeed: 0.12, rippleDecay: 0.9, rippleAmp: 0.016, jelly: 0.6, fluid: 0.45, spring: 9 },
+    physics: { rippleK: 4, rippleSpeed: 0.18, rippleDecay: 0.6, rippleAmp: 0.03, jelly: 1, fluid: 0.65, spring: 7 },
     sound: {
       // thick and slow: a low, warm stir; dragging is a soft wet suction
       bed: [
@@ -254,7 +254,7 @@ export const MATERIALS: MaterialPreset[] = [
     id: 'ferro', label: 'Ferrofluid', hint: 'Black magnetic liquid; touch and hold to draw the spikes up', group: 'glass', sessionSafe: true,
     swatch: 'radial-gradient(circle at 40% 30%,#c9c9d6,#3a3a46 30%,#08080c 65%)',
     gen: { ...NONE, ferro: 1 },
-    physics: { rippleK: 10, rippleSpeed: 0.35, rippleDecay: 2.2, rippleAmp: 0.004, jelly: 0.05, fluid: 0, spring: 30 },
+    physics: { rippleK: 14, rippleSpeed: 0.5, rippleDecay: 1.4, rippleAmp: 0.014, jelly: 0.3, fluid: 0, spring: 24 },
     sound: {
       // thick, warm and slow, like glue or lava: a low simmer, and now and then a fat bubble opening
       bed: [
@@ -384,7 +384,7 @@ export const MATERIALS: MaterialPreset[] = [
     sound: {
       // open air: a soft, high breeze; a touch is a breath of wind
       bed: [
-        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 1400, q: 0.5 }, gain: 0.006, lfo: { target: 'gain', rate: 0.04, depth: 0.003 } },
+        { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 1400, q: 0.5 }, gain: 0.006, lfo: { target: 'gain', rate: 0.04, depth: 0.003 }, follow: 'wind' },
         { kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 500, q: 0.7 }, gain: 0.008, lfo: { target: 'freq', rate: 0.03, depth: 120 } },
       ],
       event: { voice: 'swell', color: 'pink', dur: [1.4, 2.4], sweep: [300, 1600, 280], amp: 0.03 },
@@ -457,14 +457,14 @@ export const MATERIALS: MaterialPreset[] = [
     id: 'wrap', label: 'Bubble Wrap', hint: 'Pop the bubbles: tap one, or run your finger across; they slowly fill again', group: 'atmosphere', sessionSafe: false,
     swatch: 'radial-gradient(circle at 35% 30%,#ffffff,#d8ecff 30%,#9cc4ec 65%,#5e86b8)',
     gen: { ...NONE, wrap: 1 },
-    physics: { rippleK: 26, rippleSpeed: 0.9, rippleDecay: 3.5, rippleAmp: 0.008, jelly: 0.04, fluid: 0 },
+    physics: { rippleK: 22, rippleSpeed: 0.8, rippleDecay: 2.6, rippleAmp: 0.012, jelly: 0.55, fluid: 0, spring: 20 },
     sound: {
       // the room, almost nothing: pops and refills are triggered by the scene
       bed: [{ kind: 'noise', color: 'pink', filter: { type: 'bandpass', freq: 500, q: 0.8 }, gain: 0.002 }],
-      event: { voice: 'snap', body: [380, 620], amp: 0.11 },
+      event: { voice: 'snap', body: [420, 540], amp: 0.1 },
       rate: 0.0001,
       cues: {
-        pop: { voice: 'snap', body: [380, 620], amp: 0.11 },
+        pop: { voice: 'snap', body: [420, 540], amp: 0.1 },
         // a bubble filling again: an almost inaudible "fff" of air
         refill: { voice: 'swell', color: 'pink', dur: [0.7, 0.9], sweep: [1500, 3200, 1600], amp: 0.004 },
       },
